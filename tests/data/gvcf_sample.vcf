@@ -1,0 +1,12 @@
+##fileformat=VCFv4.2
+##contig=<ID=chr1,length=1000000>
+##GVCFBlock0-1=minGQ=0(inclusive),maxGQ=1(exclusive)
+##FILTER=<ID=PASS,Description="OK">
+##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">
+##FORMAT=<ID=MIN_DP,Number=1,Type=Integer,Description="Min DP in block">
+##FORMAT=<ID=RGQ,Number=1,Type=Integer,Description="Reference GQ">
+##FORMAT=<ID=DP,Number=1,Type=Integer,Description="Total depth">
+##FORMAT=<ID=GQ,Number=1,Type=Integer,Description="Genotype quality">
+##FORMAT=<ID=AD,Number=R,Type=Integer,Description="Allelic depths">
+#CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO	FORMAT	S1
+chr1	150	.	A	<NON_REF>	.	PASS	END=200	GT:DP:GQ	0/0:30:50

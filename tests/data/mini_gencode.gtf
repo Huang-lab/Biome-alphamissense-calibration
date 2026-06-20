@@ -1,0 +1,10 @@
+##description: synthetic mini gencode for tests
+chr1	HAVANA	gene	100	300	.	+	.	gene_id "ENSGBRCA1"; gene_name "BRCA1";
+chr1	HAVANA	transcript	100	300	.	+	.	gene_id "ENSGBRCA1"; transcript_id "ENSTBRCA1.1"; gene_name "BRCA1";
+chr1	HAVANA	exon	100	300	.	+	.	gene_id "ENSGBRCA1"; transcript_id "ENSTBRCA1.1"; gene_name "BRCA1"; exon_number "1";
+chr2	HAVANA	gene	500	700	.	+	.	gene_id "ENSGMEN1"; gene_name "MEN1";
+chr2	HAVANA	transcript	500	700	.	+	.	gene_id "ENSGMEN1"; transcript_id "ENSTMEN1.1"; gene_name "MEN1";
+chr2	HAVANA	exon	500	700	.	+	.	gene_id "ENSGMEN1"; transcript_id "ENSTMEN1.1"; gene_name "MEN1"; exon_number "1";
+chr3	HAVANA	gene	900	1100	.	+	.	gene_id "ENSGWT1"; gene_name "WT1";
+chr3	HAVANA	transcript	900	1100	.	+	.	gene_id "ENSGWT1"; transcript_id "ENSTWT1.1"; gene_name "WT1";
+chr3	HAVANA	exon	900	1100	.	+	.	gene_id "ENSGWT1"; transcript_id "ENSTWT1.1"; gene_name "WT1"; exon_number "1";

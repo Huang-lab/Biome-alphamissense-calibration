@@ -1,0 +1,20 @@
+*.vcf.gz
+*.vcf.gz.tbi
+*.vcf.gz.csi
+*.tsv.gz
+intermediate/
+results/
+refs/AlphaMissense*
+refs/*.tsv.gz
+refs/*.gtf.gz
+refs/*.gtf
+logs/*.stdout
+logs/*.stderr
+
+# python / editor noise
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+.DS_Store
+.vscode/
+.idea/

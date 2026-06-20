@@ -1,0 +1,144 @@
+# =============================================================================
+# BioMe AlphaMissense Calibration Pipeline — central config
+# Every script reads this file. Edit paths/params here; do NOT hard-code in code.
+# =============================================================================
+
+# -- Project layout (relative paths resolved from repo root) ------------------
+paths:
+  repo_root: "."                  # resolved at runtime
+  refs_dir: "refs"
+  intermediate_dir: "intermediate"
+  results_dir: "results"
+  logs_dir: "logs"
+
+# -- Reference inputs (read-only) ---------------------------------------------
+references:
+  alphamissense_tsv: "/sc/arion/projects/rg_huangk06/variants_PLP_BioMe/AlphaMissense/data/AlphaMissense_hg38.tsv.gz"
+  gencode_transcript_map: "/sc/arion/projects/rg_huangk06/variants_PLP_BioMe/AlphaMissense/data/gencode.v32.transcriptID_genename.tsv"
+  # Gencode v32 annotation GTF. 00_prepare_refs.sh will download from this URL
+  # if local_gtf is unset or missing. If both fetch and local lookup fail, 00
+  # falls back to AM-row min/max POS per gene with a LOUD warning.
+  gencode_gtf_url: "https://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_human/release_32/gencode.v32.primary_assembly.annotation.gtf.gz"
+  gencode_gtf_local: ""           # optional: drop-in local path overrides URL
+
+# -- Calibration (Chen/Pejaver 2026) ------------------------------------------
+calibration:
+  # Where 00 will try to fetch the published thresholds. Empty / unreachable
+  # -> writes a placeholder NA file and warns loudly. Drop the real file at
+  # `local_file` and re-run to use it.
+  zenodo_record: "18668684"
+  zenodo_api_url: "https://zenodo.org/api/records/18668684"
+  local_file: ""                  # overrides the network fetch when set
+  # Primary call uses gene-specific only. Domain-aggregate is RECORDED but
+  # NEVER used to promote a carrier (per locked decision A).
+  primary_threshold: "gene_specific"   # one of: gene_specific
+
+# -- Target gene panel (28 genes; locked; SDHD present) -----------------------
+target_genes:
+  - APC
+  - BMPR1A
+  - BRCA1
+  - BRCA2
+  - MAX
+  - MEN1
+  - MLH1
+  - MSH2
+  - MSH6
+  - NF2
+  - PALB2
+  - PMS2
+  - PTEN
+  - RB1
+  - RET
+  - SDHAF2
+  - SDHB
+  - SDHC
+  - SDHD
+  - SMAD4
+  - STK11
+  - TMEM127
+  - TP53
+  - TSC1
+  - TSC2
+  - VHL
+  - WT1
+  - MUTYH
+
+# -- Table S5 gene groups (15 syndromes; SDHD in paraganglioma) ---------------
+gene_groups:
+  Hereditary_Breast_and_Ovarian_Cancer_Syndrome: [BRCA1, BRCA2, PALB2]
+  Lynch_Syndrome:                                 [MLH1, MSH2, MSH6, PMS2]
+  Familial_Adenomatous_Polyposis:                 [APC]
+  MUTYH_Associated_Polyposis:                     [MUTYH]
+  Multiple_Endocrine_Neoplasia:                   [MEN1, RET]
+  Hereditary_Paraganglioma_Pheochromocytoma:      [SDHAF2, SDHB, SDHC, SDHD, TMEM127, MAX]
+  Li_Fraumeni_Syndrome:                           [TP53]
+  Tuberous_Sclerosis_Complex:                     [TSC1, TSC2]
+  Von_Hippel_Lindau_Syndrome:                     [VHL]
+  PTEN_Hamartoma_Tumor_Syndrome:                  [PTEN]
+  Juvenile_Polyposis_Syndrome:                    [BMPR1A, SMAD4]
+  Hereditary_Retinoblastoma:                      [RB1]
+  Peutz_Jeghers_Syndrome:                         [STK11]
+  Neurofibromatosis_Type_2:                       [NF2]
+  Wilms_Tumor_Syndrome:                           [WT1]
+
+# -- QC parameters (locked defaults; no AF) -----------------------------------
+qc:
+  filter_pass_only: true          # site FILTER == PASS
+  min_dp: 10                      # FMT/DP >= 10
+  min_gq: 20                      # FMT/GQ >= 20
+  ab_lo: 0.2                      # het allele balance lower bound
+  ab_hi: 0.8                      # het allele balance upper bound
+  drop_homref: true
+  drop_missing: true
+  # NOTE: no allele-frequency filter. Do not add one (locked decision D).
+
+# -- Cohorts ------------------------------------------------------------------
+cohorts:
+  cohortI:
+    name: "cohortI"
+    mode: "per_chr_input"
+    vcf_dir: "/sc/arion/projects/rg_huangk06/variants_PLP_BioMe/Regeneron/cancerChr"
+    # The per-chr filename pattern. {chr} will be replaced with e.g. chr1.
+    vcf_pattern: "{chr}.vcf.gz"
+    phenotype_tsv: "/sc/arion/projects/rg_huangk06/variants_PLP_BioMe/Regeneron/metadata/RegenWXS_HX_Newgroups.250109.tsv"
+    id_column: "SINAI_ID"
+    acmg_tsv: "/sc/arion/projects/rg_huangk06/variants_PLP_BioMe/AlphaMissense/2cohort/CarrFreq/Regen_VariantsInSamplesPLPorPTV.tsv"
+  cohortII:
+    name: "cohortII"
+    mode: "sliced_from_combined"
+    combined_vcf: "/sc/private/regen/data/Sema4/BioMe_Sema4_WES.vcf.gz"
+    # NEVER beside the read-only source. The pre-step puts a symlink to the
+    # source plus its .csi index under this writable directory; the 01 array
+    # reads from `${local_source_dir}/$(basename combined_vcf)`.
+    local_source_dir: "intermediate/cohortII"
+    phenotype_tsv: "/sc/arion/projects/rg_huangk06/variants_PLP_BioMe/metadata/Sema4WXS_HX_Newgroups.250109.tsv"
+    id_column: "MASKED_MRN"
+    acmg_tsv: "/sc/arion/projects/rg_huangk06/variants_PLP_BioMe/AlphaMissense/2cohort/CarrFreq/Sema4_VariantsInSamplesPLPorPTV.tsv"
+
+# -- Ancestry PCs (shared) ----------------------------------------------------
+pcs:
+  pcs_tsv: "/sc/arion/projects/rg_huangk06/variants_PLP_BioMe/GSA_GDA_PCA_V2.txt"
+  # ID column is DISCOVERED at runtime by intersecting header tokens with
+  # phenotype IDs; this can be overridden here if needed.
+  id_column: ""                   # "" = auto-discover
+  pc_columns: ["PC1","PC2","PC3","PC4","PC5","PC6","PC7","PC8","PC9","PC10"]
+
+# -- ACMG comparison ----------------------------------------------------------
+acmg:
+  # rows in the ACMG TSV whose `annotation` column contains this substring
+  # are treated as the comparison set. PTV is INCOMPARABLE to AM-missense.
+  annotation_filter_substr: "P/LP"
+  annotation_column: "annotation"
+
+# -- LSF resources per stage (Minerva acc_DiseaseGeneCell / premium) ----------
+lsf:
+  project: "acc_DiseaseGeneCell"
+  queue:   "premium"
+  step_00_prepare_refs:    { n: 2,  W: "02:00", mem: "8000" }     # login node typically; here for record
+  step_01_qc_missense:     { n: 8,  W: "08:00", mem: "16000" }
+  step_02_annotate_am:     { n: 8,  W: "12:00", mem: "24000" }    # annotation gets more
+  step_02_gather:          { n: 2,  W: "02:00", mem: "8000"  }
+  step_03_call_carriers:   { n: 4,  W: "04:00", mem: "16000" }
+  step_04_compare_tab:     { n: 4,  W: "04:00", mem: "16000" }
+  step_index_cohortII:     { n: 2,  W: "04:00", mem: "8000"  }

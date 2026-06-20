@@ -1,0 +1,45 @@
+#!/bin/bash
+#BSUB -J biome_am_03
+#BSUB -P acc_DiseaseGeneCell
+#BSUB -q premium
+#BSUB -n 4
+#BSUB -W 04:00
+#BSUB -R rusage[mem=16000]
+#BSUB -R span[hosts=1]
+#BSUB -o logs/03_call_carriers.%J.stdout
+#BSUB -eo logs/03_call_carriers.%J.stderr
+#BSUB -L /bin/bash
+# =============================================================================
+# 03_call_carriers.lsf — apply threshold policy and produce Table A
+# (per (sample,variant) with carrier columns).
+#
+# Required env: COHORT, CONFIG_PATH
+# Output: intermediate/<cohort>/A_variant_level_per_person.tsv
+# =============================================================================
+set -euo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$HERE/.." && pwd)"
+source "$REPO_ROOT/lib/common.sh"
+source "$REPO_ROOT/lib/load_modules.sh"
+
+CONFIG_PATH="${CONFIG_PATH:-$REPO_ROOT/config/config.yaml}"
+export CONFIG_PATH
+cd "$REPO_ROOT"
+
+: "${COHORT:?must set COHORT=cohortI or cohortII}"
+INTERMED="$(cfg_get paths.intermediate_dir)/${COHORT}"
+
+# Re-verify 22 outputs (decision H) — even though submitted with -w done(02_gather).
+gather_verify_22 "$INTERMED" "{chr}.am_annotated.tsv"
+
+IN="${INTERMED}/am_annotated.tsv"
+[[ -s "$IN" ]] || die "gathered annotation missing: $IN  (02_gather did not produce output)"
+OUT="${INTERMED}/A_variant_level_per_person.tsv"
+
+python3 "$REPO_ROOT/python/call_carriers.py" \
+    --config "$CONFIG_PATH" \
+    --cohort "$COHORT" \
+    --in "$IN" \
+    --out "$OUT"
+log "03_call_carriers: cohort=$COHORT DONE  -> $OUT"

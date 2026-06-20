@@ -1,0 +1,50 @@
+#!/bin/bash
+#BSUB -J biome_am_02[1-22]
+#BSUB -P acc_DiseaseGeneCell
+#BSUB -q premium
+#BSUB -n 8
+#BSUB -W 12:00
+#BSUB -R rusage[mem=24000]
+#BSUB -R span[hosts=1]
+#BSUB -o logs/02_annotate_am.%J.%I.stdout
+#BSUB -eo logs/02_annotate_am.%J.%I.stderr
+#BSUB -L /bin/bash
+# =============================================================================
+# 02_annotate_am.lsf — array [1-22]: join per-chr QC'd VCF to AM subset.
+#
+# Required env vars: COHORT, CONFIG_PATH
+# Output: intermediate/<cohort>/chr<N>.am_annotated.tsv
+# =============================================================================
+set -euo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$HERE/.." && pwd)"
+source "$REPO_ROOT/lib/common.sh"
+source "$REPO_ROOT/lib/load_modules.sh"
+
+CONFIG_PATH="${CONFIG_PATH:-$REPO_ROOT/config/config.yaml}"
+export CONFIG_PATH
+cd "$REPO_ROOT"
+
+: "${COHORT:?must set COHORT=cohortI or cohortII}"
+CHR_IDX="${LSB_JOBINDEX:-${TEST_CHR_IDX:-1}}"
+CHR="chr${CHR_IDX}"
+log "02_annotate_am: cohort=$COHORT chr=$CHR  jobid=${LSB_JOBID:-local} array=${LSB_JOBINDEX:-NA}"
+
+INTERMED="$(cfg_get paths.intermediate_dir)/${COHORT}"
+mkdir -p "$INTERMED"
+IN_VCF="${INTERMED}/${CHR}.qc.vcf.gz"
+OUT_TSV="${INTERMED}/${CHR}.am_annotated.tsv"
+[[ -s "$IN_VCF" ]] || die "QC'd VCF missing: $IN_VCF  (step 01 must finish first)"
+
+python3 "$REPO_ROOT/python/annotate_am.py" \
+    --config "$CONFIG_PATH" \
+    --cohort "$COHORT" \
+    --chr "$CHR" \
+    --vcf "$IN_VCF" \
+    --out "$OUT_TSV"
+
+# also verify single-base SNV invariant on the joined output
+guard_snv_only "$OUT_TSV"
+
+log "02_annotate_am: cohort=$COHORT chr=$CHR DONE  -> $OUT_TSV"

@@ -1,0 +1,73 @@
+#!/bin/bash
+#BSUB -J biome_am_index_cohortII
+#BSUB -P acc_DiseaseGeneCell
+#BSUB -q premium
+#BSUB -n 2
+#BSUB -W 04:00
+#BSUB -R rusage[mem=8000]
+#BSUB -R span[hosts=1]
+#BSUB -o logs/index_cohortII_source.%J.stdout
+#BSUB -eo logs/index_cohortII_source.%J.stderr
+#BSUB -L /bin/bash
+# =============================================================================
+# index_cohortII_source.lsf — DISCRETE pre-step (NOT an array).
+#
+# The Cohort II source VCF lives in /sc/private/ (read-only). We must index it
+# WITHOUT writing beside it. This job:
+#   1) symlinks the source into a writable dir (cohorts.cohortII.local_source_dir)
+#   2) creates the .csi next to the SYMLINK (so bcftools finds it automatically
+#      when 01 opens the symlink). Source dir is untouched.
+#
+# Submitted by submit_cohortII.sh BEFORE the 01[1-22] array (which depends on
+# -w "done(<this>)") so all array tasks see the index without racing.
+#
+# Idempotent: re-running with the index already present is a no-op.
+# =============================================================================
+set -euo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$HERE/.." && pwd)"
+source "$REPO_ROOT/lib/common.sh"
+source "$REPO_ROOT/lib/load_modules.sh"
+
+CONFIG_PATH="${CONFIG_PATH:-$REPO_ROOT/config/config.yaml}"
+export CONFIG_PATH
+cd "$REPO_ROOT"
+
+SRC="$(cfg_get cohorts.cohortII.combined_vcf)"
+LOCAL_DIR="$(cfg_get cohorts.cohortII.local_source_dir)"
+case "$LOCAL_DIR" in /*) ;; *) LOCAL_DIR="$REPO_ROOT/$LOCAL_DIR";; esac
+[[ -s "$SRC" ]] || die "Cohort II source VCF not found: $SRC"
+
+# REFUSE to put any artifact under /sc/private/.
+case "$LOCAL_DIR" in
+    /sc/private/*) die "REFUSING to write Cohort II artifacts under /sc/private/: $LOCAL_DIR" ;;
+esac
+
+mkdir -p "$LOCAL_DIR"
+LOCAL_SRC="$LOCAL_DIR/$(basename "$SRC")"
+LOCAL_CSI="${LOCAL_SRC}.csi"
+
+# (1) symlink source into local dir
+if [[ -L "$LOCAL_SRC" || -f "$LOCAL_SRC" ]]; then
+    log "symlink already exists: $LOCAL_SRC"
+else
+    ln -s "$SRC" "$LOCAL_SRC"
+    log "symlinked source: $LOCAL_SRC -> $SRC"
+fi
+
+# (2) index next to the symlink (bcftools writes the index in the same dir)
+if [[ -s "$LOCAL_CSI" ]]; then
+    log "Cohort II CSI already present, nothing to do: $LOCAL_CSI"
+    exit 0
+fi
+log "indexing Cohort II source (read-only) via local symlink: $LOCAL_SRC"
+# -o is supported since bcftools 1.13. Falls back to writing next to the
+# symlink path otherwise; either way the index ends up in our writable dir.
+if bcftools index --help 2>&1 | grep -q -- '-o,'; then
+    bcftools index --csi --threads 4 -f -o "$LOCAL_CSI" "$LOCAL_SRC"
+else
+    bcftools index --csi --threads 4 -f "$LOCAL_SRC"
+fi
+[[ -s "$LOCAL_CSI" ]] || die "indexing did not produce $LOCAL_CSI  (older bcftools may have written next to the resolved /sc/private/ path; upgrade to bcftools >=1.13)"
+log "Cohort II CSI written: $LOCAL_CSI"

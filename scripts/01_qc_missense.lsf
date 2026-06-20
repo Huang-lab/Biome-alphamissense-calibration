@@ -1,0 +1,125 @@
+#!/bin/bash
+#BSUB -J biome_am_01[1-22]
+#BSUB -P acc_DiseaseGeneCell
+#BSUB -q premium
+#BSUB -n 8
+#BSUB -W 08:00
+#BSUB -R rusage[mem=16000]
+#BSUB -R span[hosts=1]
+#BSUB -o logs/01_qc_missense.%J.%I.stdout
+#BSUB -eo logs/01_qc_missense.%J.%I.stderr
+#BSUB -L /bin/bash
+# =============================================================================
+# 01_qc_missense.lsf — array [1-22], dual-mode (per_chr_input | sliced_from_combined).
+#
+# Required env vars (set by submit_cohortI.sh / submit_cohortII.sh):
+#   COHORT          : "cohortI" or "cohortII"
+#   CONFIG_PATH     : path to config.yaml (defaults to repo_root/config/config.yaml)
+#
+# Output: intermediate/<cohort>/chr<N>.qc.vcf.gz  (+ .csi)
+# Per-(cohort,chr) QC counts in/out written to logs/01_qc_missense.<jobid>.<arr>.stdout
+# =============================================================================
+set -euo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$HERE/.." && pwd)"
+source "$REPO_ROOT/lib/common.sh"
+source "$REPO_ROOT/lib/load_modules.sh"
+
+CONFIG_PATH="${CONFIG_PATH:-$REPO_ROOT/config/config.yaml}"
+export CONFIG_PATH
+cd "$REPO_ROOT"
+
+: "${COHORT:?must set COHORT=cohortI or cohortII}"
+CHR_IDX="${LSB_JOBINDEX:-${TEST_CHR_IDX:-1}}"
+CHR="chr${CHR_IDX}"
+log "01_qc_missense: cohort=$COHORT chr=$CHR  jobid=${LSB_JOBID:-local} array=${LSB_JOBINDEX:-NA}"
+
+MODE="$(cfg_get "cohorts.${COHORT}.mode")"
+[[ -n "$MODE" ]] || die "cohorts.${COHORT}.mode not set in config"
+INTERMED="$(cfg_get paths.intermediate_dir)/${COHORT}"
+mkdir -p "$INTERMED" "$REPO_ROOT/logs"
+
+OUT_VCF="${INTERMED}/${CHR}.qc.vcf.gz"
+BED="$(cfg_get paths.refs_dir)/target_genes.exons.bed"
+[[ -s "$BED" ]] || die "exon BED missing or empty: $BED  (run scripts/00_prepare_refs.sh)"
+
+# build the bcftools setGT failure expression (single source of truth)
+QC_EXPR="$(build_qc_expr \
+    "$(cfg_get qc.min_dp)" \
+    "$(cfg_get qc.min_gq)" \
+    "$(cfg_get qc.ab_lo)" \
+    "$(cfg_get qc.ab_hi)")"
+log "QC mask expression: ${QC_EXPR}"
+
+# ---- resolve input ----------------------------------------------------------
+case "$MODE" in
+    per_chr_input)
+        VCF_DIR="$(cfg_get cohorts.${COHORT}.vcf_dir)"
+        PATTERN="$(cfg_get cohorts.${COHORT}.vcf_pattern)"
+        IN_VCF="${VCF_DIR}/${PATTERN//\{chr\}/${CHR}}"
+        ;;
+    sliced_from_combined)
+        SRC="$(cfg_get cohorts.${COHORT}.combined_vcf)"
+        LOCAL_DIR="$(cfg_get cohorts.${COHORT}.local_source_dir)"
+        case "$LOCAL_DIR" in /*) ;; *) LOCAL_DIR="$REPO_ROOT/$LOCAL_DIR";; esac
+        # the symlink (in our writable dir) lives alongside its .csi index
+        IN_VCF="$LOCAL_DIR/$(basename "$SRC")"
+        [[ -e "$IN_VCF" && -s "${IN_VCF}.csi" ]] \
+            || die "Cohort II local symlink/index missing under $LOCAL_DIR  (submit index_cohortII_source.lsf first; submit_cohortII.sh handles this)"
+        ;;
+    *)
+        die "unknown mode for $COHORT: $MODE  (expected per_chr_input or sliced_from_combined)"
+        ;;
+esac
+[[ -s "$IN_VCF" ]] || die "input VCF not found / empty: $IN_VCF"
+log "input VCF: $IN_VCF"
+
+# ---- guards -----------------------------------------------------------------
+log "guard: gVCF check"
+guard_not_gvcf "$IN_VCF"
+
+# ---- pre-counts -------------------------------------------------------------
+log "counting input records (region-restricted)"
+if [[ "$MODE" == "sliced_from_combined" ]]; then
+    N_IN_SITE="$(bcftools view -H -r "$CHR" -R "$BED" "$IN_VCF" 2>/dev/null | wc -l | awk '{print $1}')"
+else
+    N_IN_SITE="$(bcftools view -H -R "$BED" "$IN_VCF" 2>/dev/null | wc -l | awk '{print $1}')"
+fi
+log "  records in $CHR overlapping target BED: ${N_IN_SITE}"
+
+# ---- multiallelic guard (only inside our BED region; faster) ----------------
+log "guard: multiallelic check (within target BED)"
+if [[ "$MODE" == "sliced_from_combined" ]]; then
+    bcftools view -H -r "$CHR" -R "$BED" "$IN_VCF" 2>/dev/null \
+        | awk -F'\t' '$5 ~ /,/ {bad=$1":"$2" "$4"/"$5; exit 1} END{ if (bad) print bad > "/dev/stderr" }' \
+        || die "multiallelic record encountered in $CHR; pipeline requires biallelic"
+else
+    bcftools view -H -R "$BED" "$IN_VCF" 2>/dev/null \
+        | awk -F'\t' '$5 ~ /,/ {bad=$1":"$2" "$4"/"$5; exit 1} END{ if (bad) print bad > "/dev/stderr" }' \
+        || die "multiallelic record encountered in $CHR; pipeline requires biallelic"
+fi
+
+# ---- pipeline: region + FILTER==PASS -> mask failing GTs -> bgzip ----------
+log "running QC pipeline"
+PASS_FLAG=""; if [[ "$(cfg_get qc.filter_pass_only)" == "True" || "$(cfg_get qc.filter_pass_only)" == "true" ]]; then PASS_FLAG="-f PASS"; fi
+
+if [[ "$MODE" == "sliced_from_combined" ]]; then
+    bcftools view -r "$CHR" -R "$BED" $PASS_FLAG -Ou "$IN_VCF"
+else
+    bcftools view -R "$BED" $PASS_FLAG -Ou "$IN_VCF"
+fi \
+    | bcftools view -e 'TYPE!="snp"' -Ou - \
+    | bcftools +setGT - -- -t q -n . -i "$QC_EXPR" \
+    | bcftools view -Oz -o "$OUT_VCF" -
+
+bcftools index --csi -f "$OUT_VCF"
+
+# ---- post-counts -----------------------------------------------------------
+N_OUT_SITE="$(bcftools view -H "$OUT_VCF" 2>/dev/null | wc -l | awk '{print $1}')"
+N_OUT_CARRIER_LIKE="$(bcftools query -f '[%GT\n]' "$OUT_VCF" 2>/dev/null \
+    | awk '$1 != "./." && $1 != ".|." && $1 != "0/0" && $1 != "0|0" && $1 != "." {n++} END{print n+0}')"
+log "  records out (SNV+QC-masked): ${N_OUT_SITE}"
+log "  carrier-like genotypes after QC mask: ${N_OUT_CARRIER_LIKE}"
+log "  output: $OUT_VCF (+ .csi)"
+log "01_qc_missense: cohort=$COHORT chr=$CHR DONE"

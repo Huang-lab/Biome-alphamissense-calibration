@@ -1,0 +1,68 @@
+#!/bin/bash
+#BSUB -J biome_am_04
+#BSUB -P acc_DiseaseGeneCell
+#BSUB -q premium
+#BSUB -n 4
+#BSUB -W 04:00
+#BSUB -R rusage[mem=16000]
+#BSUB -R span[hosts=1]
+#BSUB -o logs/04_compare_and_tabulate.%J.stdout
+#BSUB -eo logs/04_compare_and_tabulate.%J.stderr
+#BSUB -L /bin/bash
+# =============================================================================
+# 04_compare_and_tabulate.lsf — emit A/B/B_summary/C tables and the cohort
+# SUMMARY fragment. After this finishes for BOTH cohorts, concatenate the
+# fragments into results/SUMMARY.md.
+#
+# Required env: COHORT, CONFIG_PATH
+# =============================================================================
+set -euo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$HERE/.." && pwd)"
+source "$REPO_ROOT/lib/common.sh"
+source "$REPO_ROOT/lib/load_modules.sh"
+
+CONFIG_PATH="${CONFIG_PATH:-$REPO_ROOT/config/config.yaml}"
+export CONFIG_PATH
+cd "$REPO_ROOT"
+
+: "${COHORT:?must set COHORT=cohortI or cohortII}"
+INTERMED="$(cfg_get paths.intermediate_dir)/${COHORT}"
+RESULTS="$(cfg_get paths.results_dir)/${COHORT}"
+mkdir -p "$RESULTS"
+
+A_IN="${INTERMED}/A_variant_level_per_person.tsv"
+[[ -s "$A_IN" ]] || die "Table A missing: $A_IN  (step 03 must finish first)"
+
+python3 "$REPO_ROOT/python/compare_tabulate.py" \
+    --config "$CONFIG_PATH" \
+    --cohort "$COHORT" \
+    --a-table "$A_IN"
+
+# Aggregate fragments into results/SUMMARY.md (idempotent: rewrites every run).
+SUMMARY="$(cfg_get paths.results_dir)/SUMMARY.md"
+{
+    echo "# BioMe AlphaMissense — Results Summary"
+    echo
+    echo "_(auto-generated; rerun \`04_compare_and_tabulate.lsf\` for each cohort to refresh)_"
+    echo
+    for c in cohortI cohortII; do
+        frag="$(cfg_get paths.results_dir)/${c}/SUMMARY_fragment.md"
+        if [[ -s "$frag" ]]; then
+            cat "$frag"
+            echo
+        fi
+    done
+    # gene coverage reflected in the reference report
+    refrep="$(cfg_get paths.refs_dir)/REFERENCE_REPORT.md"
+    if [[ -s "$refrep" ]]; then
+        echo "## Gene coverage (from refs/REFERENCE_REPORT.md)"
+        echo
+        # quote the panel table portion
+        sed -n '/^## Target panel/,/^## Coverage summary/p' "$refrep"
+        echo
+        sed -n '/^## Coverage summary/,/^## HARD GATE/p' "$refrep"
+    fi
+} > "$SUMMARY"
+log "04_compare_and_tabulate: cohort=$COHORT DONE.  Aggregated SUMMARY -> $SUMMARY"

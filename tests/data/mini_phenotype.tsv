@@ -1,0 +1,8 @@
+SINAI_ID	MASKED_MRN	Group	Age_at_diagnosis	GENDER	genetically_determined	PERS_HX_SMOKING
+S1	M1	cancer	45	F	EUR	No
+S2	M2	control	60	M	AFR	Yes
+S3	M3	cancer	50	F	EUR	No
+S4	M4	control	35	M	AMR	No
+S5	M5	cancer	55	F	EAS	No
+S6	M6	cancer	40	M	EUR	Yes
+S7	M7	control	65	F	AFR	No

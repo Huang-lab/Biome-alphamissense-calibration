@@ -1,0 +1,14 @@
+# Conda fallback for sites without Minerva Lmod modules.
+# Usage: conda env create -f environment.yml && conda activate biome-am
+name: biome-am
+channels:
+  - bioconda
+  - conda-forge
+dependencies:
+  - python=3.11
+  - bcftools>=1.17
+  - htslib>=1.17       # provides bgzip and tabix
+  - pandas>=2.0
+  - numpy>=1.24
+  - pyyaml>=6.0
+  - requests>=2.31

@@ -1,0 +1,7 @@
+# Mini AlphaMissense table for tests. Three target genes:
+#  BRCA1 (gene-specific calibrated), MEN1 (domain-only), WT1 (uncovered)
+# CHROM	POS	REF	ALT	genome	uniprot_id	transcript_id	protein_variant	am_pathogenicity	am_class
+chr1	150	A	G	hg38	P00001	ENSTBRCA1.1	M50V	0.600	likely_pathogenic
+chr1	200	A	G	hg38	P00001	ENSTBRCA1.1	K67E	0.700	likely_pathogenic
+chr2	550	C	T	hg38	P00002	ENSTMEN1.1	A20T	0.500	likely_pathogenic
+chr3	950	G	A	hg38	P00003	ENSTWT1.1	R30Q	0.700	likely_pathogenic
