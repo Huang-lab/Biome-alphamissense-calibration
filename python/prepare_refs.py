@@ -61,9 +61,24 @@ _EVIDENCE_RANK: Dict[str, int] = {
 
 
 def _evidence_rank(label: str) -> int:
+    """Map ACMG-PP3 evidence label to numeric rank.
+
+    The Chen/Pejaver table also uses a "+" suffix (e.g. BP4_Moderate+,
+    PP3_Moderate+) that indicates a stronger point assignment within the
+    same strength band. For PP3 labels we treat "_Moderate+" as Moderate-
+    or-stronger (it carries more points than plain _Moderate), so it should
+    pass any min_evidence threshold of Moderate or lower. BP4_* labels are
+    anti-pathogenic and always map to rank 0 regardless of strength.
+    """
     if not label:
         return 0
-    k = label.strip().lower().replace(" ", "").replace("-", "_")
+    raw = label.strip().lower().replace(" ", "").replace("-", "_")
+    # BP4 family: anti-pathogenic, never contributes to a pathogenic threshold
+    if raw.startswith("bp4") or raw.startswith("bp_"):
+        return 0
+    # strip trailing "+" so PP3_Moderate+ -> pp3_moderate (rank 2);
+    # PP3_Supporting+ -> pp3_supporting (rank 1); etc.
+    k = raw.rstrip("+")
     return _EVIDENCE_RANK.get(k, _EVIDENCE_RANK.get(k.replace("_", ""), 0))
 
 
