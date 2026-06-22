@@ -47,34 +47,54 @@ from util import (  # noqa: E402
 # ----------------------------------------------------------------------------
 # calibration fetch / parse
 # ----------------------------------------------------------------------------
-def _try_parse_calibration_table(content: bytes, src_label: str, target_genes: List[str]) -> Optional[Dict[str, Dict[str, str]]]:
-    """Attempt to parse a calibration TSV/CSV into {gene: {'gene_specific':..., 'domain_aggregate':..., 'notes':...}}.
+# ACMG-PP3 evidence-strength ranks. Names here are matched case-insensitively
+# against the file's evidence column with light normalization (PP3_ prefix and
+# whitespace stripped).
+_EVIDENCE_RANK: Dict[str, int] = {
+    "indeterminate": 0, "ind": 0, "none": 0, "noevidence": 0,
+    "supporting": 1, "s": 1, "pp3supporting": 1, "pp3_supporting": 1, "pp3": 1,
+    "moderate": 2, "m": 2, "pp3moderate": 2, "pp3_moderate": 2,
+    "strong": 3, "pp3strong": 3, "pp3_strong": 3,
+    "verystrong": 4, "very_strong": 4, "vstrong": 4, "vs": 4,
+    "pp3verystrong": 4, "pp3_verystrong": 4,
+}
 
-    Strategy: read header, detect which columns look like gene/threshold/domain;
-    don't assume column order. Return None if nothing recognizable.
-    """
+
+def _evidence_rank(label: str) -> int:
+    if not label:
+        return 0
+    k = label.strip().lower().replace(" ", "").replace("-", "_")
+    return _EVIDENCE_RANK.get(k, _EVIDENCE_RANK.get(k.replace("_", ""), 0))
+
+
+def _split_lines(content: bytes) -> Tuple[List[List[str]], str]:
     text = content.decode("utf-8", errors="replace")
-    # auto-detect delimiter
     first = text.splitlines()[0] if text else ""
     delim = "\t" if first.count("\t") >= first.count(",") else ","
     rows = [r.split(delim) for r in text.splitlines() if r.strip()]
-    if len(rows) < 2:
-        return None
+    return rows, delim
+
+
+def _find_col(lc: List[str], *keywords: str) -> Optional[int]:
+    for i, h in enumerate(lc):
+        if all(kw in h for kw in keywords):
+            return i
+    return None
+
+
+def _parse_gene_level_table(rows: List[List[str]], src_label: str, target_genes: List[str]) -> Optional[Dict[str, Dict[str, str]]]:
+    """Pre-aggregated gene-level table (one row per gene with explicit threshold columns)."""
     header = [h.strip() for h in rows[0]]
     lc = [h.lower() for h in header]
-
-    def find_col(*keywords: str) -> Optional[int]:
-        for i, h in enumerate(lc):
-            if all(kw in h for kw in keywords):
-                return i
-        return None
-
-    gene_i = find_col("gene")
-    gs_i = find_col("gene", "specific") or find_col("gene_thresh") or find_col("calibrated", "gene")
-    da_i = find_col("domain") if find_col("domain") is not None else find_col("aggregate")
+    gene_i = _find_col(lc, "gene")
+    gs_i = (_find_col(lc, "gene", "specific")
+            or _find_col(lc, "gene_thresh")
+            or _find_col(lc, "calibrated", "gene"))
+    da_i = _find_col(lc, "domain")
+    if da_i is None:
+        da_i = _find_col(lc, "aggregate")
     if gene_i is None or (gs_i is None and da_i is None):
         return None
-
     out: Dict[str, Dict[str, str]] = {}
     tg_set = {g.upper() for g in target_genes}
     for r in rows[1:]:
@@ -86,32 +106,130 @@ def _try_parse_calibration_table(content: bytes, src_label: str, target_genes: L
         gs = r[gs_i].strip() if (gs_i is not None and len(r) > gs_i) else ""
         da = r[da_i].strip() if (da_i is not None and len(r) > da_i) else ""
         out[g] = {
-            "gene_specific": gs if gs not in ("", "NA", "nan", "None") else "NA",
-            "domain_aggregate": da if da not in ("", "NA", "nan", "None") else "NA",
-            "notes": f"parsed from {src_label}",
+            "gene_specific":     gs if gs not in ("", "NA", "nan", "None") else "NA",
+            "domain_aggregate":  da if da not in ("", "NA", "nan", "None") else "NA",
+            "notes":             f"gene-level row from {src_label}",
         }
     return out or None
+
+
+def _parse_variant_level_table(rows: List[List[str]], src_label: str, target_genes: List[str],
+                               min_evidence: str) -> Optional[Dict[str, Dict[str, str]]]:
+    """Chen/Pejaver variant-level table: one row per variant with am_pathogenicity
+    and an evidence-strength label. Per-gene threshold = min(score) among rows
+    that meet `min_evidence` (e.g. Moderate). If a level/scope column is present
+    (values like 'gene' / 'domain'), gene_specific is computed from gene-scope
+    rows and domain_aggregate from domain-scope rows.
+    """
+    header = [h.strip() for h in rows[0]]
+    lc = [h.lower() for h in header]
+    gene_i = _find_col(lc, "gene") if _find_col(lc, "gene", "specific") is None else _find_col(lc, "gene")
+    if gene_i is None:
+        gene_i = _find_col(lc, "symbol")
+    score_i = (_find_col(lc, "am_pathogenicity")
+               or _find_col(lc, "pathogenicity")
+               or _find_col(lc, "am", "score")
+               or _find_col(lc, "score"))
+    ev_i = (_find_col(lc, "evidence")
+            or _find_col(lc, "strength")
+            or _find_col(lc, "class")
+            or _find_col(lc, "category"))
+    scope_i = (_find_col(lc, "level")
+               or _find_col(lc, "scope")
+               or _find_col(lc, "aggregation"))
+    if gene_i is None or score_i is None or ev_i is None:
+        return None
+    min_rank = _evidence_rank(min_evidence) or _EVIDENCE_RANK["moderate"]
+    tg_set = {g.upper() for g in target_genes}
+    # accumulators
+    per_gene_gs: Dict[str, float] = {}
+    per_gene_da: Dict[str, float] = {}
+    n_rows = 0
+    n_passed = 0
+    for r in rows[1:]:
+        if len(r) <= max(gene_i, score_i, ev_i):
+            continue
+        g = r[gene_i].strip().upper()
+        if g not in tg_set:
+            continue
+        n_rows += 1
+        try:
+            score = float(r[score_i].strip())
+        except ValueError:
+            continue
+        if _evidence_rank(r[ev_i]) < min_rank:
+            continue
+        n_passed += 1
+        scope = (r[scope_i].strip().lower() if (scope_i is not None and len(r) > scope_i) else "gene")
+        if scope.startswith("domain") or scope.startswith("agg"):
+            if g not in per_gene_da or score < per_gene_da[g]:
+                per_gene_da[g] = score
+        else:
+            if g not in per_gene_gs or score < per_gene_gs[g]:
+                per_gene_gs[g] = score
+    if not per_gene_gs and not per_gene_da:
+        return None
+    out: Dict[str, Dict[str, str]] = {}
+    for g in tg_set:
+        gs = per_gene_gs.get(g)
+        da = per_gene_da.get(g)
+        out[g] = {
+            "gene_specific":    f"{gs:.4f}" if gs is not None else "NA",
+            "domain_aggregate": f"{da:.4f}" if da is not None else "NA",
+            "notes":            f"derived min-score@{min_evidence} from {src_label}",
+        }
+    LOG.info("variant-level table: %d target rows, %d met evidence>=%s; %d genes with gene-specific, %d with domain-aggregate",
+             n_rows, n_passed, min_evidence, len(per_gene_gs), len(per_gene_da))
+    return out
+
+
+def _try_parse_calibration_table(content: bytes, src_label: str,
+                                 target_genes: List[str], min_evidence: str) -> Optional[Dict[str, Dict[str, str]]]:
+    rows, _ = _split_lines(content)
+    if len(rows) < 2:
+        return None
+    # try gene-level first (cheaper, more specific); fall back to variant-level
+    parsed = _parse_gene_level_table(rows, src_label, target_genes)
+    if parsed:
+        return parsed
+    return _parse_variant_level_table(rows, src_label, target_genes, min_evidence)
 
 
 def fetch_calibration(cfg: dict, target_genes: List[str]) -> Tuple[Dict[str, Dict[str, str]], str]:
     """Return (gene_to_thresholds, source_label_or_warning).
 
-    Resolves in this order:
-    1) calibration.local_file   (drop-in override)
-    2) calibration.zenodo_api_url   (network)
-    3) placeholder (all NA) + warning
+    Resolution order:
+    1) env var BIOAM_CALIBRATION_CSV  (set by 00_prepare_refs.sh after wget)
+    2) calibration.local_file         (drop-in override)
+    3) calibration.zenodo_api_url     (legacy Zenodo-API path; usually unset)
+    4) placeholder (all NA) + warning
     """
     cal_cfg = cfg.get("calibration", {})
+    min_ev = cal_cfg.get("min_evidence_strength", "Moderate")
+
+    env_csv = os.environ.get("BIOAM_CALIBRATION_CSV", "")
+    if env_csv:
+        if os.path.isfile(env_csv):
+            LOG.info("reading calibration from BIOAM_CALIBRATION_CSV: %s", env_csv)
+            with open(env_csv, "rb") as fh:
+                parsed = _try_parse_calibration_table(fh.read(), f"wget:{os.path.basename(env_csv)}",
+                                                      target_genes, min_ev)
+            if parsed:
+                return parsed, f"wget {os.path.basename(env_csv)} (min_evidence={min_ev})"
+            LOG.warning("could not auto-parse columns in %s; expected one of: gene-level (gene + gene_specific_threshold ...) or variant-level (gene + am_pathogenicity + evidence_strength)", env_csv)
+        else:
+            LOG.warning("BIOAM_CALIBRATION_CSV=%r but file is missing", env_csv)
+
     local = cal_cfg.get("local_file") or ""
     if local:
         if not os.path.isfile(local):
-            LOG.warning("calibration.local_file set to %r but file does not exist; falling back to network", local)
+            LOG.warning("calibration.local_file set to %r but file does not exist; falling back", local)
         else:
             LOG.info("reading calibration from local override: %s", local)
             with open(local, "rb") as fh:
-                parsed = _try_parse_calibration_table(fh.read(), f"local:{local}", target_genes)
+                parsed = _try_parse_calibration_table(fh.read(), f"local:{local}", target_genes, min_ev)
             if parsed:
-                return parsed, f"local file {local}"
+                return parsed, f"local file {local} (min_evidence={min_ev})"
             LOG.warning("could not auto-parse calibration columns in %s; falling back to placeholder", local)
 
     url = cal_cfg.get("zenodo_api_url")
@@ -137,9 +255,9 @@ def fetch_calibration(cfg: dict, target_genes: List[str]) -> Tuple[Dict[str, Dic
                 except Exception as e:  # noqa: BLE001
                     LOG.warning("download failed for %s: %s", name, e)
                     continue
-                parsed = _try_parse_calibration_table(sub.content, f"zenodo:{name}", target_genes)
+                parsed = _try_parse_calibration_table(sub.content, f"zenodo:{name}", target_genes, min_ev)
                 if parsed:
-                    return parsed, f"zenodo:{name}"
+                    return parsed, f"zenodo:{name} (min_evidence={min_ev})"
             LOG.warning("could not parse any calibration table from Zenodo record %s", cal_cfg.get("zenodo_record"))
         except Exception as e:  # noqa: BLE001
             LOG.warning("Zenodo fetch failed: %s", e)
@@ -147,7 +265,7 @@ def fetch_calibration(cfg: dict, target_genes: List[str]) -> Tuple[Dict[str, Dic
     # placeholder
     LOG.warning("emitting PLACEHOLDER calibration (all NA) — drop the real file at calibration.local_file and re-run")
     return ({g.upper(): {"gene_specific": "NA", "domain_aggregate": "NA",
-                        "notes": "PLACEHOLDER — calibration fetch failed; replace via config.calibration.local_file"}
+                        "notes": "PLACEHOLDER — calibration fetch failed; replace via wget step or config.calibration.local_file"}
              for g in target_genes},
             "PLACEHOLDER (fetch failed)")
 

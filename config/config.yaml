@@ -23,12 +23,18 @@ references:
 
 # -- Calibration (Chen/Pejaver 2026) ------------------------------------------
 calibration:
-  # Where 00 will try to fetch the published thresholds. Empty / unreachable
-  # -> writes a placeholder NA file and warns loudly. Drop the real file at
-  # `local_file` and re-run to use it.
+  # 00_prepare_refs.sh wgets this URL on the login node, untars it, and points
+  # the python parser at the extracted CSV. This is the variant-level
+  # calibration table (one row per variant with am_pathogenicity + evidence
+  # strength); per-gene thresholds are derived by taking the lowest score that
+  # meets `min_evidence_strength` within each gene.
   zenodo_record: "18668684"
-  zenodo_api_url: "https://zenodo.org/api/records/18668684"
-  local_file: ""                  # overrides the network fetch when set
+  zenodo_file_url: "https://zenodo.org/records/18668684/files/variant_level_calibration_table_AlphaMissense.csv.tar.gz?download=1"
+  zenodo_api_url: ""              # legacy API path; leave empty
+  local_file: ""                  # bypass network: drop your own TSV/CSV here
+  # ACMG-PP3 evidence strength to require for "gene_specific" calls.
+  # Options: Supporting | Moderate | Strong | Very Strong
+  min_evidence_strength: "Moderate"
   # Primary call uses gene-specific only. Domain-aggregate is RECORDED but
   # NEVER used to promote a carrier (per locked decision A).
   primary_threshold: "gene_specific"   # one of: gene_specific
