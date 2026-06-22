@@ -75,6 +75,17 @@ def _split_lines(content: bytes) -> Tuple[List[List[str]], str]:
     return rows, delim
 
 
+def _open_table_text(path: str):
+    """Open a TSV/CSV that may be plain or .gz."""
+    if path.endswith(".gz"):
+        return gzip.open(path, "rt", encoding="utf-8", errors="replace")
+    return open(path, "rt", encoding="utf-8", errors="replace")
+
+
+def _detect_delim(first_line: str) -> str:
+    return "\t" if first_line.count("\t") >= first_line.count(",") else ","
+
+
 def _find_col(lc: List[str], *keywords: str) -> Optional[int]:
     for i, h in enumerate(lc):
         if all(kw in h for kw in keywords):
@@ -136,38 +147,74 @@ def _parse_gene_level_table(rows: List[List[str]], src_label: str, target_genes:
 
 def _parse_variant_level_table(rows: List[List[str]], src_label: str, target_genes: List[str],
                                min_evidence: str) -> Optional[Dict[str, Dict[str, str]]]:
-    """Chen/Pejaver variant-level table: one row per variant with am_pathogenicity
-    and an evidence-strength label. Per-gene threshold = min(score) among rows
-    that meet `min_evidence` (e.g. Moderate). If a level/scope column is present
-    (values like 'gene' / 'domain'), gene_specific is computed from gene-scope
-    rows and domain_aggregate from domain-scope rows.
+    """In-memory variant-level parsing. Kept for small fixtures; the real
+    Chen/Pejaver CSV (~13M rows) goes through _stream_variant_level_table.
     """
     header = [h.strip() for h in rows[0]]
+    return _stream_variant_level_aggregate(
+        iter(rows[1:]), header, src_label, target_genes, min_evidence
+    )
+
+
+def _stream_variant_level_table(path: str, src_label: str, target_genes: List[str],
+                                min_evidence: str) -> Optional[Dict[str, Dict[str, str]]]:
+    """Stream a (potentially huge) variant-level CSV/TSV row-by-row.
+
+    Recognized columns (case-insensitive substring matching):
+      gene_symbol   <- gene
+      VEP_score     <- AM score (column name varies; we also match
+                        am_pathogenicity / pathogenicity / score)
+      evidence      <- ACMG label (PP3_Supporting / PP3_Moderate /
+                        PP3_Strong / PP3_VeryStrong / BP4_* / NO_EVIDENCE)
+      calibration_approach <- scope: gene_specific / domain_aggregate
+                              (also matched: level / scope / aggregation)
+
+    Output per gene: min(score) within each scope bucket among rows whose
+    evidence rank >= the requested minimum. BP4_* and NO_EVIDENCE map to
+    rank 0 and are excluded.
+    """
+    import csv
+    with _open_table_text(path) as fh:
+        # peek header
+        first_line = fh.readline()
+        if not first_line:
+            return None
+        delim = _detect_delim(first_line)
+        header = [h.strip().lstrip("#").strip() for h in first_line.rstrip("\n").split(delim)]
+        rdr = csv.reader(fh, delimiter=delim)
+        return _stream_variant_level_aggregate(rdr, header, src_label, target_genes, min_evidence)
+
+
+def _stream_variant_level_aggregate(row_iter, header: List[str], src_label: str,
+                                    target_genes: List[str], min_evidence: str
+                                    ) -> Optional[Dict[str, Dict[str, str]]]:
     lc = [h.lower() for h in header]
-    gene_i = _find_col(lc, "gene") if _find_col(lc, "gene", "specific") is None else _find_col(lc, "gene")
-    if gene_i is None:
-        gene_i = _find_col(lc, "symbol")
+    gene_i = (_find_col(lc, "gene", "symbol")
+              or _find_col(lc, "gene_name")
+              or _find_col(lc, "gene"))
     score_i = (_find_col(lc, "am_pathogenicity")
                or _find_col(lc, "pathogenicity")
-               or _find_col(lc, "am", "score")
+               or _find_col(lc, "vep_score")
+               or _find_col(lc, "vep", "score")
                or _find_col(lc, "score"))
     ev_i = (_find_col(lc, "evidence")
             or _find_col(lc, "strength")
             or _find_col(lc, "class")
             or _find_col(lc, "category"))
-    scope_i = (_find_col(lc, "level")
+    scope_i = (_find_col(lc, "calibration", "approach")
+               or _find_col(lc, "approach")
+               or _find_col(lc, "level")
                or _find_col(lc, "scope")
                or _find_col(lc, "aggregation"))
     if gene_i is None or score_i is None or ev_i is None:
         return None
     min_rank = _evidence_rank(min_evidence) or _EVIDENCE_RANK["moderate"]
     tg_set = {g.upper() for g in target_genes}
-    # accumulators
     per_gene_gs: Dict[str, float] = {}
     per_gene_da: Dict[str, float] = {}
     n_rows = 0
     n_passed = 0
-    for r in rows[1:]:
+    for r in row_iter:
         if len(r) <= max(gene_i, score_i, ev_i):
             continue
         g = r[gene_i].strip().upper()
@@ -206,6 +253,9 @@ def _parse_variant_level_table(rows: List[List[str]], src_label: str, target_gen
 
 def _try_parse_calibration_table(content: bytes, src_label: str,
                                  target_genes: List[str], min_evidence: str) -> Optional[Dict[str, Dict[str, str]]]:
+    """In-memory parse. Used for the legacy Zenodo-API download path (small
+    payloads). For files-on-disk (local_file / BIOAM_CALIBRATION_CSV) use
+    _try_parse_calibration_path so the 13M-row CSV streams."""
     rows, _ = _split_lines(content)
     if len(rows) < 2:
         return None
@@ -214,6 +264,34 @@ def _try_parse_calibration_table(content: bytes, src_label: str,
     if parsed:
         return parsed
     return _parse_variant_level_table(rows, src_label, target_genes, min_evidence)
+
+
+def _try_parse_calibration_path(path: str, src_label: str,
+                                target_genes: List[str], min_evidence: str) -> Optional[Dict[str, Dict[str, str]]]:
+    """Path-based parser. Reads the file header to decide gene-level vs
+    variant-level. Gene-level files are tiny (~28 rows) and slurped via the
+    in-memory parser. Variant-level files (potentially millions of rows) are
+    streamed."""
+    try:
+        with _open_table_text(path) as fh:
+            head_lines: List[str] = []
+            for _ in range(8):
+                line = fh.readline()
+                if not line:
+                    break
+                head_lines.append(line.rstrip("\n"))
+    except OSError as e:
+        LOG.warning("could not open %s: %s", path, e)
+        return None
+    if not head_lines:
+        return None
+    delim = _detect_delim(head_lines[0])
+    sample_rows = [ln.split(delim) for ln in head_lines]
+    parsed = _parse_gene_level_table(sample_rows, src_label, target_genes)
+    if parsed:
+        return parsed
+    # not gene-level → stream variant-level
+    return _stream_variant_level_table(path, src_label, target_genes, min_evidence)
 
 
 def fetch_calibration(cfg: dict, target_genes: List[str]) -> Tuple[Dict[str, Dict[str, str]], str]:
@@ -232,12 +310,11 @@ def fetch_calibration(cfg: dict, target_genes: List[str]) -> Tuple[Dict[str, Dic
     if env_csv:
         if os.path.isfile(env_csv):
             LOG.info("reading calibration from BIOAM_CALIBRATION_CSV: %s", env_csv)
-            with open(env_csv, "rb") as fh:
-                parsed = _try_parse_calibration_table(fh.read(), f"wget:{os.path.basename(env_csv)}",
-                                                      target_genes, min_ev)
+            parsed = _try_parse_calibration_path(env_csv, f"wget:{os.path.basename(env_csv)}",
+                                                  target_genes, min_ev)
             if parsed:
                 return parsed, f"wget {os.path.basename(env_csv)} (min_evidence={min_ev})"
-            LOG.warning("could not auto-parse columns in %s; expected one of: gene-level (gene + gene_specific_threshold ...) or variant-level (gene + am_pathogenicity + evidence_strength)", env_csv)
+            LOG.warning("could not auto-parse columns in %s; expected one of: gene-level (gene + gene_specific_threshold ...) or variant-level (gene_symbol + VEP_score / am_pathogenicity + evidence + calibration_approach)", env_csv)
         else:
             LOG.warning("BIOAM_CALIBRATION_CSV=%r but file is missing", env_csv)
 
@@ -247,8 +324,7 @@ def fetch_calibration(cfg: dict, target_genes: List[str]) -> Tuple[Dict[str, Dic
             LOG.warning("calibration.local_file set to %r but file does not exist; falling back", local)
         else:
             LOG.info("reading calibration from local override: %s", local)
-            with open(local, "rb") as fh:
-                parsed = _try_parse_calibration_table(fh.read(), f"local:{local}", target_genes, min_ev)
+            parsed = _try_parse_calibration_path(local, f"local:{local}", target_genes, min_ev)
             if parsed:
                 return parsed, f"local file {local} (min_evidence={min_ev})"
             LOG.warning("could not auto-parse calibration columns in %s; falling back to placeholder", local)
