@@ -83,17 +83,38 @@ def _find_col(lc: List[str], *keywords: str) -> Optional[int]:
 
 
 def _parse_gene_level_table(rows: List[List[str]], src_label: str, target_genes: List[str]) -> Optional[Dict[str, Dict[str, str]]]:
-    """Pre-aggregated gene-level table (one row per gene with explicit threshold columns)."""
+    """Pre-aggregated gene-level table (one row per gene with explicit threshold columns).
+
+    Strict: requires a gene column AND a gene-specific *numeric* threshold column.
+    A column whose name merely contains "domain" is NOT enough (the variant-level
+    table has a pfam_domain column that we must not misread as a threshold).
+    """
     header = [h.strip() for h in rows[0]]
     lc = [h.lower() for h in header]
     gene_i = _find_col(lc, "gene")
     gs_i = (_find_col(lc, "gene", "specific")
             or _find_col(lc, "gene_thresh")
             or _find_col(lc, "calibrated", "gene"))
-    da_i = _find_col(lc, "domain")
-    if da_i is None:
-        da_i = _find_col(lc, "aggregate")
-    if gene_i is None or (gs_i is None and da_i is None):
+    da_i = (_find_col(lc, "domain", "aggregate")
+            or _find_col(lc, "domain", "thresh")
+            or _find_col(lc, "aggregate", "thresh"))
+    if gene_i is None or gs_i is None:
+        # Without an explicit gene-specific column this is not a gene-level table.
+        # Fall through so the variant-level parser can try.
+        return None
+    # Verify the gene-specific column looks numeric in at least one non-NA row.
+    has_numeric_gs = False
+    for r in rows[1:]:
+        if len(r) > gs_i:
+            v = r[gs_i].strip()
+            if v and v not in ("NA", "nan", "None"):
+                try:
+                    float(v)
+                    has_numeric_gs = True
+                    break
+                except ValueError:
+                    pass
+    if not has_numeric_gs:
         return None
     out: Dict[str, Dict[str, str]] = {}
     tg_set = {g.upper() for g in target_genes}
@@ -103,7 +124,7 @@ def _parse_gene_level_table(rows: List[List[str]], src_label: str, target_genes:
         g = r[gene_i].strip().upper()
         if g not in tg_set:
             continue
-        gs = r[gs_i].strip() if (gs_i is not None and len(r) > gs_i) else ""
+        gs = r[gs_i].strip() if len(r) > gs_i else ""
         da = r[da_i].strip() if (da_i is not None and len(r) > da_i) else ""
         out[g] = {
             "gene_specific":     gs if gs not in ("", "NA", "nan", "None") else "NA",
