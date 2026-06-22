@@ -11,6 +11,9 @@ refs/*.gtf
 logs/*.stdout
 logs/*.stderr
 
+# local test-run artifacts
+tests/run/
+
 # python / editor noise
 __pycache__/
 *.pyc

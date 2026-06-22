@@ -216,11 +216,13 @@ mkdir -p "$RUN/inputs/gvcf_only"
 cp "$RUN/inputs/gvcf_sample.vcf.gz" "$RUN/inputs/gvcf_only/chr1.vcf.gz"
 cp "$RUN/inputs/gvcf_sample.vcf.gz.csi" "$RUN/inputs/gvcf_only/chr1.vcf.gz.csi"
 
-set +e
+# `set +e` does NOT suppress the inherited ERR trap from lib/common.sh, so we
+# use `|| rc=$?` (which is excluded from the ERR-trap conditions) to capture
+# the expected non-zero exit without aborting this script.
+GVCF_RC=0
 CONFIG_PATH="$GVCFCFG" COHORT=cohortI TEST_CHR_IDX=1 \
-    bash "$REPO_ROOT/scripts/01_qc_missense.lsf" 2>"$RUN/gvcf_stderr.log"
-GVCF_RC=$?
-set -e
+    bash "$REPO_ROOT/scripts/01_qc_missense.lsf" 2>"$RUN/gvcf_stderr.log" \
+    || GVCF_RC=$?
 if [[ $GVCF_RC -eq 0 ]]; then
     cat "$RUN/gvcf_stderr.log" >&2
     die "gVCF guard FAILED to abort step 01 (expected non-zero exit)"

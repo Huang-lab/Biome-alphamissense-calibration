@@ -273,9 +273,10 @@ def subset_am(am_path: str, target_transcripts: Dict[str, str], out_path: str) -
         raise KeyError(f"none of {aliases!r} in AM header")
 
     with open(tmp, "wt") as out_fh:
-        # standard AM columns we care about
-        out_fh.write("\t".join(["chrom", "pos", "ref", "alt", "uniprot_id", "transcript_id",
-                                "protein_variant", "am_pathogenicity", "am_class", "gene_name"]) + "\n")
+        # standard AM columns we care about. Header is "#"-prefixed so tabix
+        # treats it as a comment and `tabix <file> <region>` skips it cleanly.
+        out_fh.write("#" + "\t".join(["chrom", "pos", "ref", "alt", "uniprot_id", "transcript_id",
+                                       "protein_variant", "am_pathogenicity", "am_class", "gene_name"]) + "\n")
         with open_text(am_path) as fh:
             header: Optional[List[str]] = None
             header_lc: Dict[str, int] = {}

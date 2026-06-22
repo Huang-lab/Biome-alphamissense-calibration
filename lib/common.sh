@@ -186,12 +186,14 @@ gather_verify_22() {
 # divergence is visible at the top of every job's stdout.
 build_qc_expr() {
     local dp="$1" gq="$2" ab_lo="$3" ab_hi="$4"
-    # NB: in setGT context, the expression is evaluated per (variant, sample).
-    # FMT/AD[0] = REF count of the current sample, FMT/AD[1] = ALT count.
-    # We mask if: DP too low, OR GQ too low, OR (het AND AB outside band).
-    # We also mask hom-ref and missing here so step 02 sees only "carrier-like"
-    # genotypes for the AM-matched variants.
-    printf '%s' "FMT/DP<${dp} | FMT/GQ<${gq} | GT=\"RR\" | GT=\"mis\" | (GT=\"het\" & (FMT/AD[0:1]/(FMT/AD[0:0]+FMT/AD[0:1])<${ab_lo} | FMT/AD[0:1]/(FMT/AD[0:0]+FMT/AD[0:1])>${ab_hi}))"
+    # NB: in setGT context the expression is evaluated per (variant, sample).
+    # To reference the CURRENT sample's per-allele AD we must use the wildcard
+    # form FMT/AD[*:0] / FMT/AD[*:1] (REF / ALT count). The literal-index form
+    # FMT/AD[0:0] would always read sample 0 — that was a real bug here.
+    # Mask if: DP too low, OR GQ too low, OR (het AND AB outside band). Also
+    # mask hom-ref and missing so step 02 only sees carrier-like genotypes for
+    # AM-matched variants.
+    printf '%s' "FMT/DP<${dp} | FMT/GQ<${gq} | GT=\"RR\" | GT=\"mis\" | (GT=\"het\" & (FMT/AD[*:1]/(FMT/AD[*:0]+FMT/AD[*:1])<${ab_lo} | FMT/AD[*:1]/(FMT/AD[*:0]+FMT/AD[*:1])>${ab_hi}))"
 }
 
 # count_records <vcf.gz>
