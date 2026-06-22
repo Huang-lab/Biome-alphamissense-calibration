@@ -2,11 +2,15 @@
 # =============================================================================
 # 00_prepare_refs.sh — LOGIN NODE script (internet required), no LSF.
 #
-# Builds: refs/calibration_thresholds.tsv, refs/gene_transcript_map.tsv,
-#         refs/target_genes.exons.bed, refs/AlphaMissense_hg38.subset_targets.tsv.gz (+ .tbi),
-#         refs/REFERENCE_REPORT.md
-# Hard-gates: prints coverage counts and tells you to review REFERENCE_REPORT.md
-#             before submitting 01+.
+# Builds:
+#   refs/chen_calibration.target_genes.tsv.gz (+ .tbi)   <- per-variant Chen labels
+#   refs/chen_summary_by_gene.tsv                        <- per-gene Chen coverage
+#   refs/gene_transcript_map.tsv
+#   refs/target_genes.exons.bed
+#   refs/AlphaMissense_hg38.subset_targets.tsv.gz (+ .tbi)
+#   refs/REFERENCE_REPORT.md
+# Hard-gates: prints Chen coverage counts and tells you to review
+# REFERENCE_REPORT.md before submitting 01+.
 # =============================================================================
 set -euo pipefail
 

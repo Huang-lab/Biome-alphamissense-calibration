@@ -1,4 +1,0 @@
-gene	gene_specific_threshold	domain_aggregate_threshold	notes
-BRCA1	0.500	0.450	mini test: gene-specific present
-MEN1	NA	0.400	mini test: domain-aggregate only
-WT1	NA	NA	mini test: neither calibration (uncovered)

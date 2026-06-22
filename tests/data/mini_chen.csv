@@ -1,0 +1,4 @@
+gene_symbol,protein_variant,#CHROM,POS,REF,ALT,transcript_id,CLNSIG_final,hgvs_p,Cluster,domain,VEP_score,VEP_name,evidence,points,calibration_approach
+BRCA1,M50V,chr1,150,A,G,ENST_BRCA1.1,VUS,p.Met50Val,no-pfam,no_pfam,0.600,AlphaMissense,PP3_Moderate,2,single_gene
+BRCA1,K67E,chr1,200,A,G,ENST_BRCA1.1,VUS,p.Lys67Glu,no-pfam,no_pfam,0.700,AlphaMissense,PP3_Strong,4,single_gene
+MEN1,A20T,chr2,550,C,T,ENST_MEN1.1,VUS,p.Ala20Thr,RING_domain,RING_domain,0.500,AlphaMissense,PP3_Moderate+,3,domain_aggregate

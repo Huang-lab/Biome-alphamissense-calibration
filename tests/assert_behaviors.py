@@ -1,12 +1,17 @@
 """Behavioral assertions for the synthetic test run.
 
-8 cases (spec 7 + AB-filter syntax):
-  1. BRCA1 gene_specific carrier present (S1, chr1:150) — primary=TRUE, source=gene_specific
-  2. MEN1 domain-only — S1 at chr2:550, primary=FALSE, would_be_domain=TRUE, source=domain_aggregate_recorded_only
-  3. WT1 uncovered — S1 at chr3:950, threshold_source=uncovered, primary=FALSE, am_pathogenicity present
+8 cases (spec 7 + AB-filter syntax), updated for the Chen per-variant lookup:
+  1. BRCA1 (S1@chr1:150) — Chen PP3_Moderate / single_gene → primary=TRUE,
+     threshold_source=single_gene
+  2. MEN1  (S1@chr2:550) — Chen PP3_Moderate+ / domain_aggregate → primary=TRUE
+     (per Chen, the published label IS the carrier evidence regardless of
+     calibration scope), threshold_source=domain_aggregate,
+     would_be_carrier_domain_aggregate=TRUE
+  3. WT1   (S1@chr3:950) — not in Chen table → threshold_source=not_in_chen_table,
+     primary=FALSE, am_pathogenicity still recorded
   4. AM_only — S2 at BRCA1 chr1:150, category=AM_only in Table B
-  5. Both     — S1 at BRCA1 chr1:150, category=both in Table B
-  6. QC fail  — S4 (DP=5 het) absent from Table A at chr1:150
+  5. Both    — S1 at BRCA1 chr1:150, category=both in Table B
+  6. QC fail — S4 (DP=5 het) absent from Table A at chr1:150
   7. gVCF guard — checked in run_test.sh
   8. AB filter — chr1:200 S1 (AD=20,20) present; chr1:200 S3 (AD=19,1) absent
 """
@@ -59,31 +64,37 @@ def main(argv=None):
     print(f"Table B rows: {len(b_rows)}")
     print(f"Table C rows: {len(c_rows)}\n")
 
-    # Case 1: BRCA1 gene_specific carrier
+    # Case 1: BRCA1 single_gene carrier (PP3_Moderate)
     r = find_row(a_rows, sample_id="S1", chr="chr1", pos="150", gene="BRCA1")
-    assert_case("case 1: BRCA1 gene_specific carrier (S1@chr1:150) present",
+    assert_case("case 1: BRCA1 single_gene carrier (S1@chr1:150) present",
                 r is not None, "no Table A row for S1@chr1:150/BRCA1")
-    assert_case("case 1: threshold_source=gene_specific",
-                r is not None and r["threshold_source"] == "gene_specific",
+    assert_case("case 1: threshold_source=single_gene",
+                r is not None and r["threshold_source"] == "single_gene",
                 f"got threshold_source={r and r.get('threshold_source')!r}")
     assert_case("case 1: is_AM_carrier_primary=TRUE",
                 r is not None and r["is_AM_carrier_primary"].upper() == "TRUE")
+    assert_case("case 1: chen_evidence is PP3_Moderate",
+                r is not None and r.get("chen_evidence", "") == "PP3_Moderate",
+                f"got chen_evidence={r and r.get('chen_evidence')!r}")
 
-    # Case 2: MEN1 domain-only
+    # Case 2: MEN1 domain_aggregate carrier (PP3_Moderate+; primary=TRUE per
+    # Chen — the published label is the carrier evidence regardless of scope)
     r = find_row(a_rows, sample_id="S1", chr="chr2", pos="550", gene="MEN1")
-    assert_case("case 2: MEN1 domain-only row (S1@chr2:550) present", r is not None)
-    assert_case("case 2: threshold_source=domain_aggregate_recorded_only",
-                r is not None and r["threshold_source"] == "domain_aggregate_recorded_only")
-    assert_case("case 2: is_AM_carrier_primary=FALSE",
-                r is not None and r["is_AM_carrier_primary"].upper() == "FALSE")
+    assert_case("case 2: MEN1 domain_aggregate row (S1@chr2:550) present", r is not None)
+    assert_case("case 2: threshold_source=domain_aggregate",
+                r is not None and r["threshold_source"] == "domain_aggregate")
+    assert_case("case 2: is_AM_carrier_primary=TRUE (Chen PP3_Moderate+ counts)",
+                r is not None and r["is_AM_carrier_primary"].upper() == "TRUE",
+                f"got is_AM_carrier_primary={r and r.get('is_AM_carrier_primary')!r}")
     assert_case("case 2: would_be_carrier_domain_aggregate=TRUE",
                 r is not None and r["would_be_carrier_domain_aggregate"].upper() == "TRUE")
 
-    # Case 3: WT1 uncovered
+    # Case 3: WT1 not in Chen table → not_in_chen_table, primary=FALSE
     r = find_row(a_rows, sample_id="S1", chr="chr3", pos="950", gene="WT1")
-    assert_case("case 3: WT1 uncovered row (S1@chr3:950) present", r is not None)
-    assert_case("case 3: threshold_source=uncovered",
-                r is not None and r["threshold_source"] == "uncovered")
+    assert_case("case 3: WT1 not_in_chen row (S1@chr3:950) present", r is not None)
+    assert_case("case 3: threshold_source=not_in_chen_table",
+                r is not None and r["threshold_source"] == "not_in_chen_table",
+                f"got threshold_source={r and r.get('threshold_source')!r}")
     assert_case("case 3: is_AM_carrier_primary=FALSE",
                 r is not None and r["is_AM_carrier_primary"].upper() == "FALSE")
     am = r and r.get("am_pathogenicity", "")

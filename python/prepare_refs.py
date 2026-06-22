@@ -6,23 +6,21 @@ PLACEHOLDER calibration with all-NA thresholds (and the AM-row min/max BED
 fallback for coordinates), and warn loudly in the REFERENCE_REPORT.
 
 Outputs (under refs/):
-- calibration_thresholds.tsv          gene | gene_specific | domain_aggregate | notes
-- gene_transcript_map.tsv             gene_name | transcript_id | matched_by | am_transcript_used
-- target_genes.exons.bed              chrom\tstart\tend  (canonical-transcript exons, merged)
+- chen_calibration.target_genes.tsv.gz   bgzip+tabix per-variant Chen labels (28-gene subset)
+- chen_summary_by_gene.tsv               per-gene Chen coverage stats
+- gene_transcript_map.tsv                gene_name | transcript_id | matched_by | am_transcript_used
+- target_genes.exons.bed                 chrom\tstart\tend  (canonical-transcript exons, merged)
 - AlphaMissense_hg38.subset_targets.tsv.gz   AM subset to target-gene transcripts; tabixed
-- REFERENCE_REPORT.md                 28-gene table + coverage counts (hard gate)
+- REFERENCE_REPORT.md                    per-gene Chen coverage table (hard gate)
 """
 from __future__ import annotations
 
 import argparse
 import gzip
-import io
-import json
 import os
 import shutil
 import subprocess
 import sys
-import tempfile
 from typing import Dict, List, Optional, Tuple
 
 import requests  # type: ignore[import-untyped]
@@ -45,60 +43,13 @@ from util import (  # noqa: E402
 
 
 # ----------------------------------------------------------------------------
-# calibration fetch / parse
+# small parsing helpers (used by subset_chen_calibration and subset_am)
 # ----------------------------------------------------------------------------
-# ACMG-PP3 evidence-strength ranks. Names here are matched case-insensitively
-# against the file's evidence column with light normalization (PP3_ prefix and
-# whitespace stripped).
-_EVIDENCE_RANK: Dict[str, int] = {
-    "indeterminate": 0, "ind": 0, "none": 0, "noevidence": 0,
-    "supporting": 1, "s": 1, "pp3supporting": 1, "pp3_supporting": 1, "pp3": 1,
-    "moderate": 2, "m": 2, "pp3moderate": 2, "pp3_moderate": 2,
-    "strong": 3, "pp3strong": 3, "pp3_strong": 3,
-    "verystrong": 4, "very_strong": 4, "vstrong": 4, "vs": 4,
-    "pp3verystrong": 4, "pp3_verystrong": 4,
-}
-
-
-def _evidence_rank(label: str) -> int:
-    """Map ACMG-PP3 evidence label to numeric rank.
-
-    The Chen/Pejaver table also uses a "+" suffix (e.g. BP4_Moderate+,
-    PP3_Moderate+) that indicates a stronger point assignment within the
-    same strength band. For PP3 labels we treat "_Moderate+" as Moderate-
-    or-stronger (it carries more points than plain _Moderate), so it should
-    pass any min_evidence threshold of Moderate or lower. BP4_* labels are
-    anti-pathogenic and always map to rank 0 regardless of strength.
-    """
-    if not label:
-        return 0
-    raw = label.strip().lower().replace(" ", "").replace("-", "_")
-    # BP4 family: anti-pathogenic, never contributes to a pathogenic threshold
-    if raw.startswith("bp4") or raw.startswith("bp_"):
-        return 0
-    # strip trailing "+" so PP3_Moderate+ -> pp3_moderate (rank 2);
-    # PP3_Supporting+ -> pp3_supporting (rank 1); etc.
-    k = raw.rstrip("+")
-    return _EVIDENCE_RANK.get(k, _EVIDENCE_RANK.get(k.replace("_", ""), 0))
-
-
-def _split_lines(content: bytes) -> Tuple[List[List[str]], str]:
-    text = content.decode("utf-8", errors="replace")
-    first = text.splitlines()[0] if text else ""
-    delim = "\t" if first.count("\t") >= first.count(",") else ","
-    rows = [r.split(delim) for r in text.splitlines() if r.strip()]
-    return rows, delim
-
-
 def _open_table_text(path: str):
     """Open a TSV/CSV that may be plain or .gz."""
     if path.endswith(".gz"):
         return gzip.open(path, "rt", encoding="utf-8", errors="replace")
     return open(path, "rt", encoding="utf-8", errors="replace")
-
-
-def _detect_delim(first_line: str) -> str:
-    return "\t" if first_line.count("\t") >= first_line.count(",") else ","
 
 
 def _find_col(lc: List[str], *keywords: str) -> Optional[int]:
@@ -107,279 +58,6 @@ def _find_col(lc: List[str], *keywords: str) -> Optional[int]:
             return i
     return None
 
-
-def _parse_gene_level_table(rows: List[List[str]], src_label: str, target_genes: List[str]) -> Optional[Dict[str, Dict[str, str]]]:
-    """Pre-aggregated gene-level table (one row per gene with explicit threshold columns).
-
-    Strict: requires a gene column AND a gene-specific *numeric* threshold column.
-    A column whose name merely contains "domain" is NOT enough (the variant-level
-    table has a pfam_domain column that we must not misread as a threshold).
-    """
-    header = [h.strip() for h in rows[0]]
-    lc = [h.lower() for h in header]
-    gene_i = _find_col(lc, "gene")
-    gs_i = (_find_col(lc, "gene", "specific")
-            or _find_col(lc, "gene_thresh")
-            or _find_col(lc, "calibrated", "gene"))
-    da_i = (_find_col(lc, "domain", "aggregate")
-            or _find_col(lc, "domain", "thresh")
-            or _find_col(lc, "aggregate", "thresh"))
-    if gene_i is None or gs_i is None:
-        # Without an explicit gene-specific column this is not a gene-level table.
-        # Fall through so the variant-level parser can try.
-        return None
-    # Verify the gene-specific column looks numeric in at least one non-NA row.
-    has_numeric_gs = False
-    for r in rows[1:]:
-        if len(r) > gs_i:
-            v = r[gs_i].strip()
-            if v and v not in ("NA", "nan", "None"):
-                try:
-                    float(v)
-                    has_numeric_gs = True
-                    break
-                except ValueError:
-                    pass
-    if not has_numeric_gs:
-        return None
-    out: Dict[str, Dict[str, str]] = {}
-    tg_set = {g.upper() for g in target_genes}
-    for r in rows[1:]:
-        if len(r) <= gene_i:
-            continue
-        g = r[gene_i].strip().upper()
-        if g not in tg_set:
-            continue
-        gs = r[gs_i].strip() if len(r) > gs_i else ""
-        da = r[da_i].strip() if (da_i is not None and len(r) > da_i) else ""
-        out[g] = {
-            "gene_specific":     gs if gs not in ("", "NA", "nan", "None") else "NA",
-            "domain_aggregate":  da if da not in ("", "NA", "nan", "None") else "NA",
-            "notes":             f"gene-level row from {src_label}",
-        }
-    return out or None
-
-
-def _parse_variant_level_table(rows: List[List[str]], src_label: str, target_genes: List[str],
-                               min_evidence: str) -> Optional[Dict[str, Dict[str, str]]]:
-    """In-memory variant-level parsing. Kept for small fixtures; the real
-    Chen/Pejaver CSV (~13M rows) goes through _stream_variant_level_table.
-    """
-    header = [h.strip() for h in rows[0]]
-    return _stream_variant_level_aggregate(
-        iter(rows[1:]), header, src_label, target_genes, min_evidence
-    )
-
-
-def _stream_variant_level_table(path: str, src_label: str, target_genes: List[str],
-                                min_evidence: str) -> Optional[Dict[str, Dict[str, str]]]:
-    """Stream a (potentially huge) variant-level CSV/TSV row-by-row.
-
-    Recognized columns (case-insensitive substring matching):
-      gene_symbol   <- gene
-      VEP_score     <- AM score (column name varies; we also match
-                        am_pathogenicity / pathogenicity / score)
-      evidence      <- ACMG label (PP3_Supporting / PP3_Moderate /
-                        PP3_Strong / PP3_VeryStrong / BP4_* / NO_EVIDENCE)
-      calibration_approach <- scope: gene_specific / domain_aggregate
-                              (also matched: level / scope / aggregation)
-
-    Output per gene: min(score) within each scope bucket among rows whose
-    evidence rank >= the requested minimum. BP4_* and NO_EVIDENCE map to
-    rank 0 and are excluded.
-    """
-    import csv
-    with _open_table_text(path) as fh:
-        # peek header
-        first_line = fh.readline()
-        if not first_line:
-            return None
-        delim = _detect_delim(first_line)
-        header = [h.strip().lstrip("#").strip() for h in first_line.rstrip("\n").split(delim)]
-        rdr = csv.reader(fh, delimiter=delim)
-        return _stream_variant_level_aggregate(rdr, header, src_label, target_genes, min_evidence)
-
-
-def _stream_variant_level_aggregate(row_iter, header: List[str], src_label: str,
-                                    target_genes: List[str], min_evidence: str
-                                    ) -> Optional[Dict[str, Dict[str, str]]]:
-    lc = [h.lower() for h in header]
-    gene_i = (_find_col(lc, "gene", "symbol")
-              or _find_col(lc, "gene_name")
-              or _find_col(lc, "gene"))
-    score_i = (_find_col(lc, "am_pathogenicity")
-               or _find_col(lc, "pathogenicity")
-               or _find_col(lc, "vep_score")
-               or _find_col(lc, "vep", "score")
-               or _find_col(lc, "score"))
-    ev_i = (_find_col(lc, "evidence")
-            or _find_col(lc, "strength")
-            or _find_col(lc, "class")
-            or _find_col(lc, "category"))
-    scope_i = (_find_col(lc, "calibration", "approach")
-               or _find_col(lc, "approach")
-               or _find_col(lc, "level")
-               or _find_col(lc, "scope")
-               or _find_col(lc, "aggregation"))
-    if gene_i is None or score_i is None or ev_i is None:
-        return None
-    min_rank = _evidence_rank(min_evidence) or _EVIDENCE_RANK["moderate"]
-    tg_set = {g.upper() for g in target_genes}
-    per_gene_gs: Dict[str, float] = {}
-    per_gene_da: Dict[str, float] = {}
-    n_rows = 0
-    n_passed = 0
-    for r in row_iter:
-        if len(r) <= max(gene_i, score_i, ev_i):
-            continue
-        g = r[gene_i].strip().upper()
-        if g not in tg_set:
-            continue
-        n_rows += 1
-        try:
-            score = float(r[score_i].strip())
-        except ValueError:
-            continue
-        if _evidence_rank(r[ev_i]) < min_rank:
-            continue
-        n_passed += 1
-        scope = (r[scope_i].strip().lower() if (scope_i is not None and len(r) > scope_i) else "gene")
-        if scope.startswith("domain") or scope.startswith("agg"):
-            if g not in per_gene_da or score < per_gene_da[g]:
-                per_gene_da[g] = score
-        else:
-            if g not in per_gene_gs or score < per_gene_gs[g]:
-                per_gene_gs[g] = score
-    if not per_gene_gs and not per_gene_da:
-        return None
-    out: Dict[str, Dict[str, str]] = {}
-    for g in tg_set:
-        gs = per_gene_gs.get(g)
-        da = per_gene_da.get(g)
-        out[g] = {
-            "gene_specific":    f"{gs:.4f}" if gs is not None else "NA",
-            "domain_aggregate": f"{da:.4f}" if da is not None else "NA",
-            "notes":            f"derived min-score@{min_evidence} from {src_label}",
-        }
-    LOG.info("variant-level table: %d target rows, %d met evidence>=%s; %d genes with gene-specific, %d with domain-aggregate",
-             n_rows, n_passed, min_evidence, len(per_gene_gs), len(per_gene_da))
-    return out
-
-
-def _try_parse_calibration_table(content: bytes, src_label: str,
-                                 target_genes: List[str], min_evidence: str) -> Optional[Dict[str, Dict[str, str]]]:
-    """In-memory parse. Used for the legacy Zenodo-API download path (small
-    payloads). For files-on-disk (local_file / BIOAM_CALIBRATION_CSV) use
-    _try_parse_calibration_path so the 13M-row CSV streams."""
-    rows, _ = _split_lines(content)
-    if len(rows) < 2:
-        return None
-    # try gene-level first (cheaper, more specific); fall back to variant-level
-    parsed = _parse_gene_level_table(rows, src_label, target_genes)
-    if parsed:
-        return parsed
-    return _parse_variant_level_table(rows, src_label, target_genes, min_evidence)
-
-
-def _try_parse_calibration_path(path: str, src_label: str,
-                                target_genes: List[str], min_evidence: str) -> Optional[Dict[str, Dict[str, str]]]:
-    """Path-based parser. Reads the file header to decide gene-level vs
-    variant-level. Gene-level files are tiny (~28 rows) and slurped via the
-    in-memory parser. Variant-level files (potentially millions of rows) are
-    streamed."""
-    try:
-        with _open_table_text(path) as fh:
-            head_lines: List[str] = []
-            for _ in range(8):
-                line = fh.readline()
-                if not line:
-                    break
-                head_lines.append(line.rstrip("\n"))
-    except OSError as e:
-        LOG.warning("could not open %s: %s", path, e)
-        return None
-    if not head_lines:
-        return None
-    delim = _detect_delim(head_lines[0])
-    sample_rows = [ln.split(delim) for ln in head_lines]
-    parsed = _parse_gene_level_table(sample_rows, src_label, target_genes)
-    if parsed:
-        return parsed
-    # not gene-level → stream variant-level
-    return _stream_variant_level_table(path, src_label, target_genes, min_evidence)
-
-
-def fetch_calibration(cfg: dict, target_genes: List[str]) -> Tuple[Dict[str, Dict[str, str]], str]:
-    """Return (gene_to_thresholds, source_label_or_warning).
-
-    Resolution order:
-    1) env var BIOAM_CALIBRATION_CSV  (set by 00_prepare_refs.sh after wget)
-    2) calibration.local_file         (drop-in override)
-    3) calibration.zenodo_api_url     (legacy Zenodo-API path; usually unset)
-    4) placeholder (all NA) + warning
-    """
-    cal_cfg = cfg.get("calibration", {})
-    min_ev = cal_cfg.get("min_evidence_strength", "Moderate")
-
-    env_csv = os.environ.get("BIOAM_CALIBRATION_CSV", "")
-    if env_csv:
-        if os.path.isfile(env_csv):
-            LOG.info("reading calibration from BIOAM_CALIBRATION_CSV: %s", env_csv)
-            parsed = _try_parse_calibration_path(env_csv, f"wget:{os.path.basename(env_csv)}",
-                                                  target_genes, min_ev)
-            if parsed:
-                return parsed, f"wget {os.path.basename(env_csv)} (min_evidence={min_ev})"
-            LOG.warning("could not auto-parse columns in %s; expected one of: gene-level (gene + gene_specific_threshold ...) or variant-level (gene_symbol + VEP_score / am_pathogenicity + evidence + calibration_approach)", env_csv)
-        else:
-            LOG.warning("BIOAM_CALIBRATION_CSV=%r but file is missing", env_csv)
-
-    local = cal_cfg.get("local_file") or ""
-    if local:
-        if not os.path.isfile(local):
-            LOG.warning("calibration.local_file set to %r but file does not exist; falling back", local)
-        else:
-            LOG.info("reading calibration from local override: %s", local)
-            parsed = _try_parse_calibration_path(local, f"local:{local}", target_genes, min_ev)
-            if parsed:
-                return parsed, f"local file {local} (min_evidence={min_ev})"
-            LOG.warning("could not auto-parse calibration columns in %s; falling back to placeholder", local)
-
-    url = cal_cfg.get("zenodo_api_url")
-    if url:
-        try:
-            LOG.info("fetching calibration record from %s", url)
-            resp = requests.get(url, timeout=30)
-            resp.raise_for_status()
-            meta = resp.json()
-            files = meta.get("files", []) or []
-            LOG.info("Zenodo record has %d file(s)", len(files))
-            for f in files:
-                name = f.get("key") or f.get("filename") or ""
-                link = (f.get("links") or {}).get("self") or f.get("download") or ""
-                if not link:
-                    continue
-                LOG.info("inspecting %s", name)
-                if not (name.endswith(".tsv") or name.endswith(".csv") or name.endswith(".txt")):
-                    continue
-                try:
-                    sub = requests.get(link, timeout=60)
-                    sub.raise_for_status()
-                except Exception as e:  # noqa: BLE001
-                    LOG.warning("download failed for %s: %s", name, e)
-                    continue
-                parsed = _try_parse_calibration_table(sub.content, f"zenodo:{name}", target_genes, min_ev)
-                if parsed:
-                    return parsed, f"zenodo:{name} (min_evidence={min_ev})"
-            LOG.warning("could not parse any calibration table from Zenodo record %s", cal_cfg.get("zenodo_record"))
-        except Exception as e:  # noqa: BLE001
-            LOG.warning("Zenodo fetch failed: %s", e)
-
-    # placeholder
-    LOG.warning("emitting PLACEHOLDER calibration (all NA) — drop the real file at calibration.local_file and re-run")
-    return ({g.upper(): {"gene_specific": "NA", "domain_aggregate": "NA",
-                        "notes": "PLACEHOLDER — calibration fetch failed; replace via wget step or config.calibration.local_file"}
-             for g in target_genes},
-            "PLACEHOLDER (fetch failed)")
 
 
 # ----------------------------------------------------------------------------
@@ -480,6 +158,169 @@ def merge_intervals(ivs: List[Tuple[str, int, int]]) -> List[Tuple[str, int, int
         else:
             merged.append((c, s, e))
     return merged
+
+
+# ----------------------------------------------------------------------------
+# Chen/Pejaver calibration table (variant-level) — subset + tabix
+# ----------------------------------------------------------------------------
+# Per Chen/Pejaver methodology, each variant in the published table is
+# pre-assigned an ACMG-PP3/BP4 evidence label using the gene's (or its PFAM
+# domain's) calibrated posterior curve. Downstream we apply by PER-VARIANT
+# LOOKUP — we do NOT re-derive per-gene thresholds. See README + Tavtigian
+# Bayesian framework (calib_step03.py in the Chen repo).
+
+# Evidence labels that count as a "carrier" at a given minimum strength.
+# `+` suffix is the Tavtigian intermediate strength (+3 points, between
+# Moderate=+2 and Strong=+4). BP4_* are anti-pathogenic and never count.
+_PP3_AT_LEAST_MODERATE = {
+    "pp3_moderate", "pp3_moderate+",
+    "pp3_strong",   "pp3_strong+",
+    "pp3_verystrong", "pp3_very_strong",
+}
+_PP3_AT_LEAST_SUPPORTING = _PP3_AT_LEAST_MODERATE | {"pp3_supporting", "pp3_supporting+"}
+_PP3_AT_LEAST_STRONG = {"pp3_strong", "pp3_strong+", "pp3_verystrong", "pp3_very_strong"}
+_PP3_AT_LEAST_VERYSTRONG = {"pp3_verystrong", "pp3_very_strong"}
+
+
+def evidence_set_for(min_strength: str) -> set:
+    s = (min_strength or "").strip().lower().replace(" ", "")
+    if s in ("supporting", "pp3supporting", "pp3_supporting"):
+        return _PP3_AT_LEAST_SUPPORTING
+    if s in ("strong", "pp3strong", "pp3_strong"):
+        return _PP3_AT_LEAST_STRONG
+    if s in ("verystrong", "very_strong", "pp3verystrong", "pp3_verystrong"):
+        return _PP3_AT_LEAST_VERYSTRONG
+    return _PP3_AT_LEAST_MODERATE  # default
+
+
+def normalize_evidence(label: str) -> str:
+    """Normalize an evidence label for set-membership comparison."""
+    if not label:
+        return ""
+    return label.strip().lower().replace(" ", "").replace("-", "_")
+
+
+def subset_chen_calibration(chen_csv: str, target_genes: List[str], out_path: str,
+                            min_strength: str) -> Dict[str, dict]:
+    """Stream the Chen variant-level calibration CSV, keep rows for target
+    genes only, write a sorted bgzip+tabix indexed TSV.
+
+    Output TSV columns (header "#"-prefixed for tabix):
+      #chrom  pos  ref  alt  gene_symbol  evidence  points  calibration_approach  domain  vep_score
+
+    Returns a per-gene coverage summary:
+      { gene_upper: { n_in_chen, n_pp3_atleast_min, n_single_gene, n_domain_agg,
+                      domains_seen (set), example_evidence (mode) } }
+    """
+    import csv as _csv
+    refs_dir = os.path.dirname(out_path) or "."
+    os.makedirs(refs_dir, exist_ok=True)
+    tg_set = {g.upper() for g in target_genes}
+    pos_set = evidence_set_for(min_strength)
+
+    unsorted = out_path[:-3] + ".unsorted.tsv" if out_path.endswith(".gz") else out_path + ".unsorted.tsv"
+    sorted_tmp = out_path[:-3] if out_path.endswith(".gz") else out_path + ".tmp"
+
+    summary: Dict[str, dict] = {
+        g.upper(): {"n_in_chen": 0, "n_pp3_atleast_min": 0,
+                    "n_single_gene": 0, "n_domain_agg": 0,
+                    "domains_seen": set(), "labels": Counter_dict()}
+        for g in target_genes
+    }
+
+    n_total = 0
+    n_kept = 0
+    LOG.info("subsetting Chen calibration table → %d target genes from %s", len(tg_set), chen_csv)
+    with _open_table_text(chen_csv) as fh, open(unsorted, "wt") as out_fh:
+        rdr = _csv.reader(fh)
+        header = next(rdr)
+        # header has been seen (e.g. gene_symbol, ...). Locate columns case-insensitively.
+        lc = [h.strip().lstrip("#").strip().lower() for h in header]
+        gene_i  = _find_col(lc, "gene", "symbol") or _find_col(lc, "gene_name") or _find_col(lc, "gene")
+        chrom_i = _find_col(lc, "chrom") if _find_col(lc, "chrom") is not None else _find_col(lc, "chr")
+        pos_i   = _find_col(lc, "pos")
+        ref_i   = _find_col(lc, "ref")
+        alt_i   = _find_col(lc, "alt")
+        ev_i    = _find_col(lc, "evidence")
+        pts_i   = _find_col(lc, "points")
+        ca_i    = _find_col(lc, "calibration", "approach") or _find_col(lc, "approach")
+        dom_i   = _find_col(lc, "domain")
+        score_i = _find_col(lc, "vep_score") or _find_col(lc, "vep", "score") or _find_col(lc, "score")
+        for col, name in [(gene_i, "gene_symbol"), (chrom_i, "chrom"), (pos_i, "pos"),
+                          (ref_i, "ref"), (alt_i, "alt"), (ev_i, "evidence"),
+                          (ca_i, "calibration_approach")]:
+            if col is None:
+                die(f"Chen CSV missing required column: {name}; got header {header}")
+        out_fh.write("#" + "\t".join(["chrom", "pos", "ref", "alt", "gene_symbol",
+                                       "evidence", "points", "calibration_approach",
+                                       "domain", "vep_score"]) + "\n")
+        for r in rdr:
+            n_total += 1
+            try:
+                g = r[gene_i].strip().upper()
+            except IndexError:
+                continue
+            if g not in tg_set:
+                continue
+            chrom = chrom_norm(r[chrom_i].strip())
+            pos = r[pos_i].strip()
+            ref = r[ref_i].strip()
+            alt = r[alt_i].strip()
+            ev  = r[ev_i].strip()
+            pts = r[pts_i].strip() if pts_i is not None and pts_i < len(r) else ""
+            ca  = r[ca_i].strip()
+            dom = r[dom_i].strip() if dom_i is not None and dom_i < len(r) else ""
+            vep = r[score_i].strip() if score_i is not None and score_i < len(r) else ""
+            out_fh.write("\t".join([chrom, pos, ref, alt, g, ev, pts, ca, dom, vep]) + "\n")
+            n_kept += 1
+            s = summary[g]
+            s["n_in_chen"] += 1
+            ca_l = ca.lower()
+            if ca_l.startswith("single") or ca_l == "gene_specific":
+                s["n_single_gene"] += 1
+            elif ca_l.startswith("domain") or ca_l.startswith("agg"):
+                s["n_domain_agg"] += 1
+            if dom and dom.lower() not in ("no_pfam", "no-pfam", "none", ""):
+                s["domains_seen"].add(dom)
+            ev_n = normalize_evidence(ev)
+            s["labels"][ev_n] += 1
+            if ev_n in pos_set:
+                s["n_pp3_atleast_min"] += 1
+
+    LOG.info("Chen subset: %d rows scanned, %d kept (%.2f%%); now sorting by (chrom,pos)",
+             n_total, n_kept, 100.0 * n_kept / max(n_total, 1))
+
+    # Sort by chrom (lex) then pos (numeric) — keeps the "#"-prefixed header on top.
+    # We use the shell `sort` to avoid loading the file in memory.
+    subprocess.check_call(
+        ["bash", "-c",
+         f"(head -n 1 {shellquote(unsorted)} && tail -n +2 {shellquote(unsorted)} "
+         f"| sort -t$'\\t' -k1,1 -k2,2n) > {shellquote(sorted_tmp)}"]
+    )
+    os.remove(unsorted)
+    subprocess.check_call(["bgzip", "-f", sorted_tmp])
+    if sorted_tmp + ".gz" != out_path:
+        shutil.move(sorted_tmp + ".gz", out_path)
+    subprocess.check_call(["tabix", "-f", "-s", "1", "-b", "2", "-e", "2", out_path])
+    LOG.info("Chen calibration target subset -> %s (+ .tbi)", out_path)
+    return summary
+
+
+def shellquote(p: str) -> str:
+    import shlex
+    return shlex.quote(p)
+
+
+class Counter_dict(dict):
+    """Tiny counter that returns 0 for missing keys and supports +=."""
+    def __getitem__(self, k):
+        return super().get(k, 0)
+    def __setitem__(self, k, v):
+        super().__setitem__(k, v)
+    def mode(self) -> Optional[str]:
+        if not self:
+            return None
+        return max(self.items(), key=lambda kv: kv[1])[0]
 
 
 # ----------------------------------------------------------------------------
@@ -587,21 +428,28 @@ def main(argv: Optional[List[str]] = None) -> int:
     refs_dir = resolve(cfg, cfg["paths"]["refs_dir"])
     os.makedirs(refs_dir, exist_ok=True)
 
-    # ---- calibration --------------------------------------------------------
-    if args.skip_network and not (cfg.get("calibration", {}).get("local_file")):
-        LOG.warning("--skip-network and no local_file set; emitting placeholder calibration")
-        cal_map, cal_src = ({g.upper(): {"gene_specific": "NA", "domain_aggregate": "NA",
-                                          "notes": "PLACEHOLDER (skip-network)"} for g in target_genes},
-                            "PLACEHOLDER (skip-network)")
+    # ---- Chen/Pejaver variant-level calibration table (per-variant lookup) --
+    cal_cfg = cfg.get("calibration", {})
+    min_strength = cal_cfg.get("min_evidence_strength", "Moderate")
+    chen_subset_path = os.path.join(refs_dir, "chen_calibration.target_genes.tsv.gz")
+    chen_csv = (os.environ.get("BIOAM_CALIBRATION_CSV", "") or "").strip()
+    if not chen_csv:
+        chen_csv = (cal_cfg.get("local_file") or "").strip()
+    chen_summary: Dict[str, dict] = {}
+    chen_source = "NOT_AVAILABLE"
+    if chen_csv and os.path.isfile(chen_csv):
+        chen_summary = subset_chen_calibration(chen_csv, target_genes, chen_subset_path, min_strength)
+        chen_source = os.path.basename(chen_csv)
     else:
-        cal_map, cal_src = fetch_calibration(cfg, target_genes)
-
-    cal_out = os.path.join(refs_dir, "calibration_thresholds.tsv")
-    rows = []
-    for g in target_genes:
-        e = cal_map.get(g.upper(), {"gene_specific": "NA", "domain_aggregate": "NA", "notes": "missing from source"})
-        rows.append([g, e.get("gene_specific", "NA"), e.get("domain_aggregate", "NA"), e.get("notes", "")])
-    write_tsv(cal_out, ["gene", "gene_specific_threshold", "domain_aggregate_threshold", "notes"], rows)
+        LOG.warning("No Chen calibration CSV available (BIOAM_CALIBRATION_CSV unset and "
+                    "calibration.local_file empty/missing). Step 02 will mark every "
+                    "variant as not_in_Chen_table and no carriers will be called. "
+                    "Run scripts/00_prepare_refs.sh on a node with internet OR drop the "
+                    "file at calibration.local_file.")
+        chen_summary = {g.upper(): {"n_in_chen": 0, "n_pp3_atleast_min": 0,
+                                     "n_single_gene": 0, "n_domain_agg": 0,
+                                     "domains_seen": set(), "labels": Counter_dict()}
+                        for g in target_genes}
 
     # ---- gencode map (gene -> transcripts) ----------------------------------
     gencode_map_path = resolve(cfg, cfg["references"]["gencode_transcript_map"])
@@ -735,54 +583,117 @@ def main(argv: Optional[List[str]] = None) -> int:
         if bed_source == "AM_minmax_fallback":
             LOG.warning("wrote BED via AM-row min/max FALLBACK -> %s. This includes introns; reviewer requested exon-based BED. Set references.gencode_gtf_local or re-run on a login node with internet.", bed_path)
 
-    # ---- REFERENCE_REPORT.md (28-gene table + hard gate) --------------------
-    n_gs = n_da_only = n_uncov = 0
+    # ---- chen_summary_by_gene.tsv (per-gene Chen coverage stats) ------------
+    summary_rows: List[List[str]] = []
+    for g in target_genes:
+        s = chen_summary.get(g.upper(), {"n_in_chen": 0, "n_pp3_atleast_min": 0,
+                                          "n_single_gene": 0, "n_domain_agg": 0,
+                                          "domains_seen": set(), "labels": Counter_dict()})
+        ca_mode = "single_gene" if s["n_single_gene"] >= s["n_domain_agg"] else "domain_aggregate"
+        if s["n_in_chen"] == 0:
+            ca_mode = "none"
+        summary_rows.append([
+            g,
+            str(s["n_in_chen"]),
+            str(s["n_pp3_atleast_min"]),
+            str(s["n_single_gene"]),
+            str(s["n_domain_agg"]),
+            ca_mode,
+            ",".join(sorted(s["domains_seen"])) or "no_pfam",
+        ])
+    write_tsv(os.path.join(refs_dir, "chen_summary_by_gene.tsv"),
+              ["gene", "n_variants_in_chen", "n_pp3_at_least_" + min_strength.lower().replace(" ", ""),
+               "n_calibration_single_gene", "n_calibration_domain_aggregate",
+               "calibration_approach_majority", "pfam_domains"], summary_rows)
+
+    # ---- REFERENCE_REPORT.md (per-gene Chen coverage table + hard gate) -----
+    n_with_pp3 = 0
+    n_only_pp3_sup = 0
+    n_no_chen = 0
     lines: List[str] = []
     lines.append("# BioMe AlphaMissense — Reference Report\n")
-    lines.append(f"- Calibration source: **{cal_src}**")
+    lines.append(f"- Chen calibration source: **{chen_source}**")
+    lines.append(f"- Min carrier evidence: **PP3_{min_strength}** (variant counts as carrier "
+                 f"iff its Chen `evidence` label ≥ this)")
     lines.append(f"- AM file: `{am_path}`")
     lines.append(f"- Gencode map: `{gencode_map_path}`")
     lines.append(f"- Exon-BED source: **{bed_source}**" +
                  ("  ⚠️  *AM-row min/max fallback — drop a real GTF at `references.gencode_gtf_local` and rerun.*"
                   if bed_source != "gencode_exon" else ""))
     lines.append("")
+    lines.append("Carriers are identified per-variant by **looking up each BioMe variant in Chen's "
+                 "calibration table** (joined on chrom/pos/ref/alt) and reading the published "
+                 "`evidence` label. We do **NOT** re-derive per-gene thresholds — Chen has already "
+                 "applied its gene-specific or domain-aggregate calibration curve to every variant "
+                 "in the table.")
+    lines.append("")
     lines.append(f"## Target panel ({len(target_genes)} genes)")
     lines.append("")
-    lines.append("| gene | AM_transcript_found | coordinates_resolved | gene_specific_threshold | domain_aggregate_threshold | primary_status |")
-    lines.append("|------|---------------------|----------------------|-------------------------|----------------------------|----------------|")
+    lines.append("| gene | AM_transcript_found | coordinates_resolved | n_variants_in_Chen | "
+                 f"n_PP3_≥{min_strength} | calibration_approach | PFAM_domains |")
+    lines.append("|------|---------------------|----------------------|--------------------|"
+                 "----------------------|----------------------|--------------|")
     for g in target_genes:
         gu = g.upper()
-        cal = cal_map.get(gu, {"gene_specific": "NA", "domain_aggregate": "NA"})
-        gs = cal.get("gene_specific", "NA")
-        da = cal.get("domain_aggregate", "NA")
+        s = chen_summary.get(gu, {})
         am_found = coverage.get(g, {}).get("am_found", False)
         coords = "yes" if g in coords_per_gene else "no"
-        if gs != "NA":
-            status = "gene_specific"; n_gs += 1
-        elif da != "NA":
-            status = "domain_only_recorded"; n_da_only += 1
+        n_in = s.get("n_in_chen", 0)
+        n_pp3 = s.get("n_pp3_atleast_min", 0)
+        n_sg = s.get("n_single_gene", 0)
+        n_da = s.get("n_domain_agg", 0)
+        if n_in == 0:
+            ca_label = "—"
+            n_no_chen += 1
         else:
-            status = "uncovered_dropped"; n_uncov += 1
-        lines.append(f"| {g} | {'yes' if am_found else 'no'} | {coords} | {gs} | {da} | {status} |")
+            ca_label = "single_gene" if n_sg >= n_da else "domain_aggregate"
+            if n_pp3 > 0:
+                n_with_pp3 += 1
+            else:
+                n_only_pp3_sup += 1
+        domains = sorted(s.get("domains_seen", set()))
+        dom_str = ",".join(domains) if domains else "(none / no_pfam)"
+        if len(dom_str) > 40:
+            dom_str = dom_str[:37] + "..."
+        lines.append(f"| {g} | {'yes' if am_found else 'no'} | {coords} | "
+                     f"{n_in} | {n_pp3} | {ca_label} | {dom_str} |")
     lines.append("")
     lines.append("## Coverage summary")
-    lines.append(f"- gene_specific calibrated: **{n_gs}**")
-    lines.append(f"- domain-aggregate only (RECORDED, not used for primary call): **{n_da_only}**")
-    lines.append(f"- uncovered (retained with score, primary=FALSE): **{n_uncov}**")
+    lines.append(f"- genes with ≥1 carrier-eligible Chen variant (PP3_≥{min_strength}): **{n_with_pp3}**")
+    lines.append(f"- genes with Chen rows but none reaching PP3_{min_strength}: **{n_only_pp3_sup}** "
+                 f"(carriers must reach this threshold to be called primary)")
+    lines.append(f"- genes with no Chen rows at all: **{n_no_chen}**")
     lines.append(f"- total: **{len(target_genes)}**")
     lines.append("")
+    lines.append("## How carriers are called downstream")
+    lines.append("")
+    lines.append(f"For every BioMe variant that passes step-01 QC, step 02 (annotate_am.py) "
+                 f"does a tabix lookup against `chen_calibration.target_genes.tsv.gz` on "
+                 f"`(chrom, pos, ref, alt)`. Step 03 (call_carriers.py) sets:")
+    lines.append("")
+    lines.append(f"- `is_AM_carrier_primary = TRUE` iff the looked-up `evidence` label is in "
+                 f"{{PP3_Moderate, PP3_Moderate+, PP3_Strong, PP3_Strong+, PP3_VeryStrong}} "
+                 f"(or whatever `calibration.min_evidence_strength` resolves to).")
+    lines.append(f"- `chen_calibration_approach` is copied from the Chen table "
+                 f"(`single_gene` / `domain_aggregate`).")
+    lines.append(f"- Variants **not** in the Chen table get `is_AM_carrier_primary = FALSE` "
+                 f"and `threshold_source = not_in_Chen_table`. Their AM score is still recorded.")
+    lines.append("")
     lines.append("## HARD GATE")
-    lines.append("Review this report before submitting steps 01+.  In particular:")
-    lines.append("- if calibration source is PLACEHOLDER, drop the real file at `calibration.local_file` and re-run `00_prepare_refs.sh`;")
-    lines.append("- if exon BED source is `AM_minmax_fallback`, set `references.gencode_gtf_local` to a local GTF and re-run.")
+    lines.append("Review this report before submitting steps 01+. In particular:")
+    lines.append(f"- if Chen calibration source is `NOT_AVAILABLE`, drop the file at "
+                 f"`calibration.local_file` (or set `BIOAM_CALIBRATION_CSV`) and re-run "
+                 f"`00_prepare_refs.sh`;")
+    lines.append("- if exon BED source is `AM_minmax_fallback`, set `references.gencode_gtf_local` "
+                 "to a local GTF and re-run.")
     report_path = os.path.join(refs_dir, "REFERENCE_REPORT.md")
     with open(report_path, "w") as fh:
         fh.write("\n".join(lines) + "\n")
     LOG.info("wrote %s", report_path)
 
-    # final hard-gate print (also visible in stdout)
     print()
-    print(f"== reference coverage: gene_specific={n_gs}  domain_only={n_da_only}  uncovered={n_uncov} ==")
+    print(f"== Chen coverage: genes_with_PP3_>={min_strength}={n_with_pp3}  "
+          f"genes_with_only_subthreshold={n_only_pp3_sup}  genes_with_no_chen={n_no_chen} ==")
     print(f"== review {report_path} before submitting 01+ ==")
     return 0
 

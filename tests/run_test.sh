@@ -68,7 +68,9 @@ references:
 calibration:
   zenodo_record: "TEST"
   zenodo_api_url: ""
-  local_file: "$DATA/mini_calibration.tsv"
+  zenodo_file_url: ""
+  local_file: "$DATA/mini_chen.csv"
+  min_evidence_strength: "Moderate"
   primary_threshold: "gene_specific"
 
 target_genes:
