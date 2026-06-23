@@ -100,36 +100,44 @@ log "input VCF: $IN_VCF"
 log "guard: gVCF check"
 guard_not_gvcf "$IN_VCF"
 
+# ---- VCF-convention auto-detect & per-job BED build ------------------------
+# Cohort I (Regeneron) uses no-`chr` contigs and FILTER='.'; cohort II uses
+# `chr` prefix and FILTER='PASS'. Detect at run time so the same script works.
+PFX="$(vcf_chrom_prefix "$IN_VCF")"   # "chr" or ""
+CHROM_VCF="${PFX}${CHR_IDX}"           # "chr17" or "17"
+log "VCF chrom convention: prefix=${PFX:-<none>}  region='${CHROM_VCF}'"
+
+JOB_BED="${INTERMED}/${CHR}.target.bed"
+if [[ "$PFX" == "chr" ]]; then
+    cp "$BED" "$JOB_BED"
+else
+    awk 'BEGIN{FS=OFS="\t"} { sub(/^chr/, "", $1); print }' "$BED" > "$JOB_BED"
+fi
+
+PASS_FLAG=""
+if [[ "$(cfg_get qc.filter_pass_only)" == "True" || "$(cfg_get qc.filter_pass_only)" == "true" ]]; then
+    if vcf_filter_has_pass "$IN_VCF"; then
+        PASS_FLAG="-f PASS"
+    else
+        warn "FILTER column has no PASS values in $(basename "$IN_VCF"); treating '.' as PASS (file is presumed pre-filtered upstream)"
+    fi
+fi
+
 # ---- pre-counts -------------------------------------------------------------
 log "counting input records (region-restricted)"
-if [[ "$MODE" == "sliced_from_combined" ]]; then
-    N_IN_SITE="$(bcftools view -H -r "$CHR" -R "$BED" "$IN_VCF" 2>/dev/null | wc -l | awk '{print $1}')"
-else
-    N_IN_SITE="$(bcftools view -H -R "$BED" "$IN_VCF" 2>/dev/null | wc -l | awk '{print $1}')"
-fi
-log "  records in $CHR overlapping target BED: ${N_IN_SITE}"
+N_IN_SITE="$(bcftools view -H -r "$CHROM_VCF" -R "$JOB_BED" "$IN_VCF" 2>/dev/null | wc -l | awk '{print $1}')"
+log "  records in ${CHROM_VCF} overlapping target BED: ${N_IN_SITE}"
+log "  FILTER values present: $(bcftools query -f '%FILTER\n' -r "$CHROM_VCF" "$IN_VCF" 2>/dev/null | sort -u | tr '\n' ',' | sed 's/,$//')"
 
 # ---- multiallelic guard (only inside our BED region; faster) ----------------
 log "guard: multiallelic check (within target BED)"
-if [[ "$MODE" == "sliced_from_combined" ]]; then
-    bcftools view -H -r "$CHR" -R "$BED" "$IN_VCF" 2>/dev/null \
-        | awk -F'\t' '$5 ~ /,/ {bad=$1":"$2" "$4"/"$5; exit 1} END{ if (bad) print bad > "/dev/stderr" }' \
-        || die "multiallelic record encountered in $CHR; pipeline requires biallelic"
-else
-    bcftools view -H -R "$BED" "$IN_VCF" 2>/dev/null \
-        | awk -F'\t' '$5 ~ /,/ {bad=$1":"$2" "$4"/"$5; exit 1} END{ if (bad) print bad > "/dev/stderr" }' \
-        || die "multiallelic record encountered in $CHR; pipeline requires biallelic"
-fi
+bcftools view -H -r "$CHROM_VCF" -R "$JOB_BED" "$IN_VCF" 2>/dev/null \
+    | awk -F'\t' '$5 ~ /,/ {bad=$1":"$2" "$4"/"$5; exit 1} END{ if (bad) print bad > "/dev/stderr" }' \
+    || die "multiallelic record encountered in ${CHROM_VCF}; pipeline requires biallelic"
 
-# ---- pipeline: region + FILTER==PASS -> mask failing GTs -> bgzip ----------
+# ---- pipeline: region + FILTER -> mask failing GTs -> bgzip ----------------
 log "running QC pipeline"
-PASS_FLAG=""; if [[ "$(cfg_get qc.filter_pass_only)" == "True" || "$(cfg_get qc.filter_pass_only)" == "true" ]]; then PASS_FLAG="-f PASS"; fi
-
-if [[ "$MODE" == "sliced_from_combined" ]]; then
-    bcftools view -r "$CHR" -R "$BED" $PASS_FLAG -Ou "$IN_VCF"
-else
-    bcftools view -R "$BED" $PASS_FLAG -Ou "$IN_VCF"
-fi \
+bcftools view -r "$CHROM_VCF" -R "$JOB_BED" $PASS_FLAG -Ou "$IN_VCF" \
     | bcftools view -e 'TYPE!="snp"' -Ou - \
     | bcftools +setGT - -- -t q -n . -i "$QC_EXPR" \
     | bcftools view -Oz -o "$OUT_VCF" -

@@ -235,6 +235,58 @@ if ! grep -q "Input appears to be a combined gVCF" "$RUN/gvcf_stderr.log"; then
 fi
 log "gVCF guard: OK (exited $GVCF_RC with the prescribed message)"
 
+# ---- chrom-prefix + FILTER auto-detect regression test --------------------
+# Regression coverage for the BioMe Regeneron convention: contigs are `1`, `2`,
+# … (no `chr` prefix) and the FILTER column is `.` (file was pre-filtered to
+# PASS upstream). Without the auto-detect helpers in lib/common.sh, step 01
+# would silently produce an empty chr1.qc.vcf.gz.
+log "==== chrom-prefix/FILTER auto-detect test ===="
+NPDIR="$RUN/inputs/noprefix_dotfilter"
+mkdir -p "$NPDIR"
+cat > "$NPDIR/chr1.vcf" <<'NPVCF'
+##fileformat=VCFv4.2
+##contig=<ID=1,length=1000000>
+##FILTER=<ID=PASS,Description="OK">
+##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">
+##FORMAT=<ID=AD,Number=R,Type=Integer,Description="Allelic depths">
+##FORMAT=<ID=DP,Number=1,Type=Integer,Description="Total depth">
+##FORMAT=<ID=GQ,Number=1,Type=Integer,Description="Genotype quality">
+#CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO	FORMAT	S1	S2	S3	S4	S5	S6
+1	150	.	A	G	100	.	.	GT:AD:DP:GQ	0/1:15,15:30:40	0/1:20,20:40:50	0/0:30,0:30:50	0/1:3,2:5:40	0/0:35,0:35:50	0/0:30,0:30:50
+1	200	.	A	G	100	.	.	GT:AD:DP:GQ	0/1:20,20:40:50	0/0:30,0:30:50	0/1:19,1:20:40	0/0:30,0:30:50	0/0:30,0:30:50	0/0:30,0:30:50
+NPVCF
+bgzip -f "$NPDIR/chr1.vcf"
+bcftools index --csi -f "$NPDIR/chr1.vcf.gz"
+
+# Variant config: point cohortI's vcf_dir at the no-prefix fixture and route
+# intermediate/results into sandboxed subdirs so we don't clobber the main run.
+NPCFG="$RUN/noprefix_test_config.yaml"
+mkdir -p "$RUN/np_intermediate/cohortI" "$RUN/np_results" "$RUN/np_logs"
+sed -e "s|$RUN/inputs/cohortI|$NPDIR|g" \
+    -e "s|intermediate_dir: \"$RUN/intermediate\"|intermediate_dir: \"$RUN/np_intermediate\"|g" \
+    -e "s|results_dir: \"$RUN/results\"|results_dir: \"$RUN/np_results\"|g" \
+    -e "s|logs_dir: \"$RUN/logs\"|logs_dir: \"$RUN/np_logs\"|g" \
+    "$CONFIG" > "$NPCFG"
+
+CONFIG_PATH="$NPCFG" COHORT=cohortI TEST_CHR_IDX=1 \
+    bash "$REPO_ROOT/scripts/01_qc_missense.lsf" 2> "$RUN/np_stderr.log"
+
+NPOUT="$RUN/np_intermediate/cohortI/chr1.qc.vcf.gz"
+NPCNT="$(bcftools view -H "$NPOUT" 2>/dev/null | wc -l | awk '{print $1}')"
+if (( NPCNT < 1 )); then
+    cat "$RUN/np_stderr.log" >&2
+    die "auto-detect FAILED: chr1.qc.vcf.gz is empty. The no-'chr' / FILTER='.' auto-detect regressed."
+fi
+if ! grep -qF "treating '.' as PASS" "$RUN/np_stderr.log"; then
+    cat "$RUN/np_stderr.log" >&2
+    die "auto-detect FAILED: missing 'treating '.' as PASS' warning in step 01 stderr"
+fi
+if ! grep -qF "prefix=<none>" "$RUN/np_stderr.log"; then
+    cat "$RUN/np_stderr.log" >&2
+    die "auto-detect FAILED: missing 'prefix=<none>' log line for no-'chr' VCF"
+fi
+log "auto-detect test: OK (${NPCNT} record(s) survived; prefix=<none>; PASS-equivalent warning fired)"
+
 # ---- behavioral assertions -------------------------------------------------
 log "==== behavioral assertions ===="
 python3 "$REPO_ROOT/tests/assert_behaviors.py" --run-dir "$RUN" --config "$CONFIG"

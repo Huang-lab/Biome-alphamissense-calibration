@@ -200,3 +200,37 @@ build_qc_expr() {
 count_records() {
     bcftools view -H "$1" 2>/dev/null | wc -l | awk '{print $1}'
 }
+
+# ---- VCF-convention sniffers (defensive adapters for step 01) ---------------
+# The BioMe Regeneron VCFs use the no-`chr` convention (contig IDs are `1`, `2`,
+# …) AND set FILTER to `.` rather than `PASS` (the filename's `PASS.onTarget`
+# token records that upstream pre-filtered to PASS and then reset the column).
+# Our refs are gencode v32 (chr-prefixed) and our QC asks for `FILTER==PASS`.
+# These two helpers let step 01 detect both conventions at run time, so the
+# same script handles cohort I (no-prefix, dot-FILTER) and cohort II / tests
+# (chr-prefixed, PASS-FILTER) without configuration.
+
+# vcf_chrom_prefix <vcf.gz>
+# Prints "chr" if the VCF's first ##contig ID begins with "chr", else "".
+vcf_chrom_prefix() {
+    local vcf="$1"
+    [[ -f "$vcf" ]] || die "vcf_chrom_prefix: file not found: $vcf"
+    local first_id
+    first_id="$(bcftools view -h "$vcf" 2>/dev/null \
+        | awk -F'[=<>,]' '/^##contig=/ {
+            for (i=1; i<=NF; i++) if ($i == "ID") { print $(i+1); exit }
+        }')"
+    if [[ "$first_id" == chr* ]]; then
+        printf 'chr'
+    else
+        printf ''
+    fi
+}
+
+# vcf_filter_has_pass <vcf.gz>
+# Exit 0 if the VCF body has at least one record with FILTER==PASS; else exit 1.
+vcf_filter_has_pass() {
+    local vcf="$1"
+    [[ -f "$vcf" ]] || die "vcf_filter_has_pass: file not found: $vcf"
+    bcftools view -H -f PASS "$vcf" 2>/dev/null | head -n1 | grep -q .
+}
