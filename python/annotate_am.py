@@ -28,7 +28,7 @@ from typing import Dict, Iterable, List, Optional, Tuple
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from util import LOG, chrom_norm, die, load_config, resolve, write_tsv  # noqa: E402
+from util import LOG, chrom_norm, die, load_config, resolve, vcf_chrom_prefix, write_tsv  # noqa: E402
 
 
 # ----------------------------------------------------------------------------
@@ -210,11 +210,19 @@ def main(argv: Optional[List[str]] = None) -> int:
     am_subset = os.path.join(refs_dir, "AlphaMissense_hg38.subset_targets.tsv.gz")
     chen_subset = os.path.join(refs_dir, "chen_calibration.target_genes.tsv.gz")
 
-    region = args.chr if args.chr.startswith("chr") else f"chr{args.chr}"
-    am = load_am_for_region(am_subset, region)
+    # Reference subsets (AM, Chen) are always chr-prefixed (gencode convention
+    # from step 00). The QC'd VCF may use either convention depending on cohort;
+    # step 02 detects it per-VCF so `bcftools query -r` matches the file.
+    ref_region = args.chr if args.chr.startswith("chr") else f"chr{args.chr}"
+    vcf_pfx = vcf_chrom_prefix(args.vcf)
+    chr_num = args.chr[3:] if args.chr.startswith("chr") else args.chr
+    vcf_region = f"{vcf_pfx}{chr_num}"
+    LOG.info("region: ref=%s vcf=%s (vcf prefix=%s)", ref_region, vcf_region, vcf_pfx or "<none>")
+
+    am = load_am_for_region(am_subset, ref_region)
     if not am:
-        LOG.warning("no AM rows for %s; output will be empty header-only", region)
-    chen = load_chen_for_region(chen_subset, region)
+        LOG.warning("no AM rows for %s; output will be empty header-only", ref_region)
+    chen = load_chen_for_region(chen_subset, ref_region)
 
     header = ["sample_id", "cohort", "chr", "pos", "ref", "alt", "gene", "transcript",
               "protein_variant", "am_pathogenicity", "am_class",
@@ -226,7 +234,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     n_var_matched = 0
     n_carrier_rows = 0
     n_in_chen = 0
-    for chrom, pos, ref, alt, samples in stream_vcf_genotypes(args.vcf, region=region):
+    for chrom, pos, ref, alt, samples in stream_vcf_genotypes(args.vcf, region=vcf_region):
         n_var_in += 1
         rec = am.get((chrom, pos, ref, alt))
         if rec is None:
@@ -253,7 +261,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     write_tsv(args.out, header, rows_out)
     LOG.info("%s %s: variants_streamed=%d AM_matched_variants=%d in_Chen=%d carrier_rows=%d",
-             args.cohort, region, n_var_in, n_var_matched, n_in_chen, n_carrier_rows)
+             args.cohort, ref_region, n_var_in, n_var_matched, n_in_chen, n_carrier_rows)
     return 0
 
 

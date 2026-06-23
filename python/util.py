@@ -219,6 +219,21 @@ def chrom_norm(c: str) -> str:
     return f"chr{c}"
 
 
+def vcf_chrom_prefix(vcf: str) -> str:
+    """Inspect a VCF's first ##contig header and return 'chr' if the file uses
+    the chr-prefixed convention, else ''. Used by step 02 to decide what region
+    string to pass to `bcftools query -r` — must match the file's CHROM column."""
+    import subprocess
+    p = subprocess.run(["bcftools", "view", "-h", vcf],
+                       capture_output=True, text=True, check=True)
+    for line in p.stdout.splitlines():
+        if line.startswith("##contig"):
+            m = re.search(r"ID=([^,>]+)", line)
+            if m:
+                return "chr" if m.group(1).startswith("chr") else ""
+    return "chr"  # no ##contig declared — fall back to chr-prefix
+
+
 def parse_gtf_attrs(field9: str) -> Dict[str, str]:
     """GTF attribute field: gene_id "ENSG..."; transcript_id "ENST..."; ..."""
     out: Dict[str, str] = {}
