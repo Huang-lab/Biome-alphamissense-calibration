@@ -2,6 +2,34 @@
 
 Code-only LSF pipeline (manual `bsub`) for applying gene-specific calibrated AlphaMissense thresholds (Chen/Pejaver 2026) to 28 cancer-predisposition genes in BioMe Cohort I (Regeneron) and Cohort II (Sema4), comparing against an existing ACMG P/LP set, and producing regression-ready tables.
 
+## Cohort input files (Minerva paths)
+
+All paths below are also encoded in `config/config.yaml` — that file is the single source of truth. This table is a quick reference.
+
+### Cohort I (Regeneron WXS)
+| Purpose | Path | Notes |
+|---|---|---|
+| Per-chr VCFs | `/sc/arion/projects/rg_huangk06/variants_PLP_BioMe/Regeneron/cancerChr/SINAI_Freeze_Two.GL.pVCF.PASS.onTarget.biallelic.{chr}.cancerGenes.vcf.gz` | `{chr}` = `chr1`..`chr22` (also `chrX` exists but no panel genes are on it, so we only iterate autosomes) |
+| Phenotype TSV | `/sc/arion/projects/rg_huangk06/variants_PLP_BioMe/Regeneron/metadata/RegenWXS_HX_Newgroups.250109.tsv` | ID column: **`SINAI_ID`** |
+| ACMG P/LP set | `/sc/arion/projects/rg_huangk06/variants_PLP_BioMe/AlphaMissense/2cohort/CarrFreq/Regen_VariantsInSamplesPLPorPTV.tsv` | PTV rows excluded (not comparable to AM-missense) |
+
+### Cohort II (Sema4 WXS)
+| Purpose | Path | Notes |
+|---|---|---|
+| Combined VCF | `/sc/private/regen/data/Sema4/BioMe_Sema4_WES.vcf.gz` | **READ-ONLY**; never write beside it |
+| Local `.csi` for the combined VCF | `intermediate/cohortII/BioMe_Sema4_WES.vcf.gz.csi` | Written by `index_cohortII_source.lsf` (the discrete pre-step). 01 reads via `source##idx##local.csi` |
+| Phenotype TSV | `/sc/arion/projects/rg_huangk06/variants_PLP_BioMe/metadata/Sema4WXS_HX_Newgroups.250109.tsv` | ID column: **`MASKED_MRN`** |
+| ACMG P/LP set | `/sc/arion/projects/rg_huangk06/variants_PLP_BioMe/AlphaMissense/2cohort/CarrFreq/Sema4_VariantsInSamplesPLPorPTV.tsv` | Same schema as Cohort I |
+
+### Shared inputs
+| Purpose | Path | Notes |
+|---|---|---|
+| AlphaMissense scores | `/sc/arion/projects/rg_huangk06/variants_PLP_BioMe/AlphaMissense/data/AlphaMissense_hg38.tsv.gz` | Step 00 subsets to the 28 target genes |
+| Gencode v32 transcript→gene map | `/sc/arion/projects/rg_huangk06/variants_PLP_BioMe/AlphaMissense/data/gencode.v32.transcriptID_genename.tsv` | Step 00 picks the canonical transcript per gene |
+| Ancestry PCs | `/sc/arion/projects/rg_huangk06/variants_PLP_BioMe/GSA_GDA_PCA_V2.txt` | PC id column auto-discovered (max overlap with phenotype IDs) |
+| Chen/Pejaver variant-level calibration table | `refs/zenodo/newAM_calibration_table_20260206.csv` | Step 00 wgets from Zenodo record 18668684 and untars |
+| Repo location (this code) | `/sc/arion/projects/rg_huangk06/variants_PLP_BioMe/Biome-alphamissense-calibration` | Submit scripts compute this at runtime |
+
 ## Run order (manual on Minerva)
 
 1. **Prepare references — login node, internet required.**
@@ -20,13 +48,21 @@ Code-only LSF pipeline (manual `bsub`) for applying gene-specific calibrated Alp
    ```bash
    bash scripts/submit_cohortI.sh
    ```
-   Chains `01[1-22]` → `02[1-22]` → `02_gather` → `03` → `04` via `bsub -w "done(...)"`.
+   Chains `01[1-22]` → `02[1-22]` → `02_gather` → `03` → `04` via `bsub -w "done(...)"`. Each step is submitted via a generated wrapper script that hardcodes `BIOAM_REPO_ROOT`, `COHORT`, and `CONFIG_PATH` as `export` statements inside the wrapper body — this is necessary because Minerva LSF does not propagate user env vars through `bsub -env` reliably.
 
 4. **Cohort II (Sema4, single combined VCF in `/sc/private/`) — submit on a login node.**
    ```bash
    bash scripts/submit_cohortII.sh
    ```
    Chains `index_cohortII_source` → `01[1-22]` → `02[1-22]` → `02_gather` → `03` → `04`. The pre-step writes a `.csi` for the read-only source under `intermediate/cohortII/`; the 22 array tasks then `bcftools view -r chr<N>` against `source##idx##local.csi`.
+
+### Smoke-test a single chromosome
+For debugging or re-running a failed array task without re-submitting the whole pipeline:
+```bash
+bash scripts/submit_one_chr.sh cohortI 01_qc_missense 17
+bash scripts/submit_one_chr.sh cohortI 02_annotate_am 17
+```
+Both `01_qc_missense` and `02_annotate_am` are array steps and can be re-run per chromosome. Other steps (`02_gather`, `03`, `04`) are whole-cohort and have no array index.
 
 5. **Collect deliverables.**
    - `results/<cohort>/A_variant_level_per_person.tsv`

@@ -5,6 +5,10 @@
 # The discrete index_cohortII_source job runs FIRST so all 22 array tasks see
 # the .csi (no race). The source VCF stays in /sc/private/ untouched; the .csi
 # is written under intermediate/cohortII/.
+#
+# Same wrapper-generation approach as submit_cohortI.sh — see that file for
+# the rationale (Minerva LSF drops -env user vars; we bake them into the
+# wrapper script body as plain `export` statements).
 # =============================================================================
 set -euo pipefail
 
@@ -20,29 +24,63 @@ command -v bsub >/dev/null 2>&1 || die "bsub not on PATH; submit from a Minerva 
 [[ -s "$REPO_ROOT/refs/REFERENCE_REPORT.md" ]] || die "refs/REFERENCE_REPORT.md missing; run scripts/00_prepare_refs.sh first"
 mkdir -p "$REPO_ROOT/logs" "$REPO_ROOT/intermediate/$COHORT"
 
-JIDX="biome_am_index_${COHORT}"
-J01="biome_am_01_${COHORT}"
-J02="biome_am_02_${COHORT}"
-J02G="biome_am_02gather_${COHORT}"
-J03="biome_am_03_${COHORT}"
-J04="biome_am_04_${COHORT}"
+PROJECT="$(cfg_get lsf.project)"
+QUEUE="$(cfg_get lsf.queue)"
+
+emit_wrapper() {
+    local step_key="$1" array_spec="$2" wait_clause="$3" lsf_name="$4"
+    local job_name="biome_am_${step_key#step_}_${COHORT}"
+    local n W mem
+    n="$(cfg_get "lsf.${step_key}.n")"
+    W="$(cfg_get "lsf.${step_key}.W")"
+    mem="$(cfg_get "lsf.${step_key}.mem")"
+    local jname="${job_name}${array_spec}"
+    cat <<WRAPPER
+#!/bin/bash
+#BSUB -J ${jname}
+#BSUB -P ${PROJECT}
+#BSUB -q ${QUEUE}
+#BSUB -n ${n}
+#BSUB -W ${W}
+#BSUB -R rusage[mem=${mem}]
+#BSUB -R span[hosts=1]
+#BSUB -o ${REPO_ROOT}/logs/${step_key#step_}.%J.%I.stdout
+#BSUB -eo ${REPO_ROOT}/logs/${step_key#step_}.%J.%I.stderr
+#BSUB -L /bin/bash
+$( [[ -n "$wait_clause" ]] && echo "#BSUB -w \"${wait_clause}\"" )
+
+# >>> values baked in by submit_cohortII.sh at submission time <<<
+export BIOAM_REPO_ROOT=${REPO_ROOT}
+export COHORT=${COHORT}
+export CONFIG_PATH=${CONFIG_PATH}
+
+cd "\$BIOAM_REPO_ROOT"
+exec bash "\$BIOAM_REPO_ROOT/scripts/${lsf_name}"
+WRAPPER
+}
+
+JIDX="biome_am_index_cohortII_${COHORT}"
+J01="biome_am_01_qc_missense_${COHORT}"
+J02="biome_am_02_annotate_am_${COHORT}"
+J02G="biome_am_02_gather_${COHORT}"
+J03="biome_am_03_call_carriers_${COHORT}"
 
 log "Cohort II: submitting source-index pre-step"
-bsub -J "$JIDX" -env "all, CONFIG_PATH=$CONFIG_PATH, BIOAM_REPO_ROOT=$REPO_ROOT" < "$REPO_ROOT/scripts/index_cohortII_source.lsf"
+emit_wrapper step_index_cohortII   ""       ""               index_cohortII_source.lsf | bsub
 
-log "Cohort II: submitting 01 array [1-22] with -w done($JIDX)"
-bsub -J "${J01}[1-22]" -w "done(${JIDX})" -env "all, COHORT=$COHORT, CONFIG_PATH=$CONFIG_PATH, BIOAM_REPO_ROOT=$REPO_ROOT" < "$REPO_ROOT/scripts/01_qc_missense.lsf"
+log "Cohort II: submitting 01 array [1-22] gated on index"
+emit_wrapper step_01_qc_missense   "[1-22]" "done(${JIDX})"  01_qc_missense.lsf       | bsub
 
-log "Cohort II: submitting 02 array [1-22] with -w done($J01)"
-bsub -J "${J02}[1-22]" -w "done(${J01})" -env "all, COHORT=$COHORT, CONFIG_PATH=$CONFIG_PATH, BIOAM_REPO_ROOT=$REPO_ROOT" < "$REPO_ROOT/scripts/02_annotate_am.lsf"
+log "Cohort II: submitting 02 array [1-22] gated on 01"
+emit_wrapper step_02_annotate_am   "[1-22]" "done(${J01})"   02_annotate_am.lsf       | bsub
 
-log "Cohort II: submitting 02_gather with -w done($J02)"
-bsub -J "$J02G" -w "done(${J02})" -env "all, COHORT=$COHORT, CONFIG_PATH=$CONFIG_PATH, BIOAM_REPO_ROOT=$REPO_ROOT" < "$REPO_ROOT/scripts/02_gather.lsf"
+log "Cohort II: submitting 02_gather gated on 02"
+emit_wrapper step_02_gather        ""       "done(${J02})"   02_gather.lsf            | bsub
 
-log "Cohort II: submitting 03 with -w done($J02G)"
-bsub -J "$J03" -w "done(${J02G})" -env "all, COHORT=$COHORT, CONFIG_PATH=$CONFIG_PATH, BIOAM_REPO_ROOT=$REPO_ROOT" < "$REPO_ROOT/scripts/03_call_carriers.lsf"
+log "Cohort II: submitting 03 gated on 02_gather"
+emit_wrapper step_03_call_carriers ""       "done(${J02G})"  03_call_carriers.lsf     | bsub
 
-log "Cohort II: submitting 04 with -w done($J03)"
-bsub -J "$J04" -w "done(${J03})" -env "all, COHORT=$COHORT, CONFIG_PATH=$CONFIG_PATH, BIOAM_REPO_ROOT=$REPO_ROOT" < "$REPO_ROOT/scripts/04_compare_and_tabulate.lsf"
+log "Cohort II: submitting 04 gated on 03"
+emit_wrapper step_04_compare_tab   ""       "done(${J03})"   04_compare_and_tabulate.lsf | bsub
 
-log "Cohort II chain submitted. Monitor with: bjobs -J 'biome_am_*_${COHORT}*'"
+log "Cohort II chain submitted. Monitor with: bjobs -J 'biome_am_*_${COHORT}'"

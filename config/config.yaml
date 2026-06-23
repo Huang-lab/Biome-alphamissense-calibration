@@ -113,7 +113,7 @@ cohorts:
     mode: "per_chr_input"
     vcf_dir: "/sc/arion/projects/rg_huangk06/variants_PLP_BioMe/Regeneron/cancerChr"
     # The per-chr filename pattern. {chr} will be replaced with e.g. chr1.
-    vcf_pattern: "{chr}.vcf.gz"
+    vcf_pattern: "SINAI_Freeze_Two.GL.pVCF.PASS.onTarget.biallelic.{chr}.cancerGenes.vcf.gz"
     phenotype_tsv: "/sc/arion/projects/rg_huangk06/variants_PLP_BioMe/Regeneron/metadata/RegenWXS_HX_Newgroups.250109.tsv"
     id_column: "SINAI_ID"
     acmg_tsv: "/sc/arion/projects/rg_huangk06/variants_PLP_BioMe/AlphaMissense/2cohort/CarrFreq/Regen_VariantsInSamplesPLPorPTV.tsv"
