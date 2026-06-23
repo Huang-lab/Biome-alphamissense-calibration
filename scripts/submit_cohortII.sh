@@ -28,21 +28,21 @@ J03="biome_am_03_${COHORT}"
 J04="biome_am_04_${COHORT}"
 
 log "Cohort II: submitting source-index pre-step"
-bsub -J "$JIDX" -env "all, CONFIG_PATH=$CONFIG_PATH" < "$REPO_ROOT/scripts/index_cohortII_source.lsf"
+bsub -J "$JIDX" -env "all, CONFIG_PATH=$CONFIG_PATH, BIOAM_REPO_ROOT=$REPO_ROOT" < "$REPO_ROOT/scripts/index_cohortII_source.lsf"
 
 log "Cohort II: submitting 01 array [1-22] with -w done($JIDX)"
-bsub -J "${J01}[1-22]" -w "done(${JIDX})" -env "all, COHORT=$COHORT, CONFIG_PATH=$CONFIG_PATH" < "$REPO_ROOT/scripts/01_qc_missense.lsf"
+bsub -J "${J01}[1-22]" -w "done(${JIDX})" -env "all, COHORT=$COHORT, CONFIG_PATH=$CONFIG_PATH, BIOAM_REPO_ROOT=$REPO_ROOT" < "$REPO_ROOT/scripts/01_qc_missense.lsf"
 
 log "Cohort II: submitting 02 array [1-22] with -w done($J01)"
-bsub -J "${J02}[1-22]" -w "done(${J01})" -env "all, COHORT=$COHORT, CONFIG_PATH=$CONFIG_PATH" < "$REPO_ROOT/scripts/02_annotate_am.lsf"
+bsub -J "${J02}[1-22]" -w "done(${J01})" -env "all, COHORT=$COHORT, CONFIG_PATH=$CONFIG_PATH, BIOAM_REPO_ROOT=$REPO_ROOT" < "$REPO_ROOT/scripts/02_annotate_am.lsf"
 
 log "Cohort II: submitting 02_gather with -w done($J02)"
-bsub -J "$J02G" -w "done(${J02})" -env "all, COHORT=$COHORT, CONFIG_PATH=$CONFIG_PATH" < "$REPO_ROOT/scripts/02_gather.lsf"
+bsub -J "$J02G" -w "done(${J02})" -env "all, COHORT=$COHORT, CONFIG_PATH=$CONFIG_PATH, BIOAM_REPO_ROOT=$REPO_ROOT" < "$REPO_ROOT/scripts/02_gather.lsf"
 
 log "Cohort II: submitting 03 with -w done($J02G)"
-bsub -J "$J03" -w "done(${J02G})" -env "all, COHORT=$COHORT, CONFIG_PATH=$CONFIG_PATH" < "$REPO_ROOT/scripts/03_call_carriers.lsf"
+bsub -J "$J03" -w "done(${J02G})" -env "all, COHORT=$COHORT, CONFIG_PATH=$CONFIG_PATH, BIOAM_REPO_ROOT=$REPO_ROOT" < "$REPO_ROOT/scripts/03_call_carriers.lsf"
 
 log "Cohort II: submitting 04 with -w done($J03)"
-bsub -J "$J04" -w "done(${J03})" -env "all, COHORT=$COHORT, CONFIG_PATH=$CONFIG_PATH" < "$REPO_ROOT/scripts/04_compare_and_tabulate.lsf"
+bsub -J "$J04" -w "done(${J03})" -env "all, COHORT=$COHORT, CONFIG_PATH=$CONFIG_PATH, BIOAM_REPO_ROOT=$REPO_ROOT" < "$REPO_ROOT/scripts/04_compare_and_tabulate.lsf"
 
 log "Cohort II chain submitted. Monitor with: bjobs -J 'biome_am_*_${COHORT}*'"

@@ -21,8 +21,19 @@
 # =============================================================================
 set -euo pipefail
 
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$HERE/.." && pwd)"
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"
+# When bsub reads this file via stdin (`bsub ... < script.lsf`), LSF runs
+# the script from /local/JOBS/.../shell and HERE/.. resolves to /local. So
+# prefer the BIOAM_REPO_ROOT env var (the submit_*.sh wrappers export it);
+# fall back to $HERE/.. for direct invocation (`bash scripts/01_qc_missense.lsf`).
+if [[ -n "${BIOAM_REPO_ROOT:-}" && -d "$BIOAM_REPO_ROOT/lib" ]]; then
+    REPO_ROOT="$BIOAM_REPO_ROOT"
+elif [[ -n "${HERE:-}" && -d "$HERE/../lib" ]]; then
+    REPO_ROOT="$(cd "$HERE/.." && pwd)"
+else
+    echo "ERROR: cannot find repo root. Set BIOAM_REPO_ROOT=/path/to/repo." >&2
+    exit 1
+fi
 source "$REPO_ROOT/lib/common.sh"
 source "$REPO_ROOT/lib/load_modules.sh"
 
