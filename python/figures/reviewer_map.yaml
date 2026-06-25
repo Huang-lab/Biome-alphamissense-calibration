@@ -1,0 +1,140 @@
+# Reviewer / Action mapping for each figure + table panel.
+#
+# The rebuttal letter cites a figure or table next to each reviewer quote;
+# this file keeps the panel <-> Action <-> reviewer-quote mapping in one place
+# so the citations don't drift as figures are renumbered. Update both the
+# figure docstring and this YAML when you change a panel's purpose.
+#
+# Schema (per entry):
+#   panel:     "figNX" or "TableN" or "TableSN"
+#   actions:   list of Action numbers from a6017a48-Summary_of_Reviewer_Comments.md
+#   reviewers: list of R1/R2/R3 — the reviewer(s) whose concern this addresses
+#   quote:     verbatim snippet from the reviewer letter (max ~120 chars).
+#              Reviewer quotes have NOT been pasted yet; placeholders below
+#              flag the slot. Replace once the user provides the full letter.
+panels:
+
+  - panel: fig1A
+    actions: [Action_2]
+    reviewers: [R3]
+    quote: "REVIEWER QUOTE PENDING — ClinVar review-status stratification ask"
+
+  - panel: fig1B
+    actions: [Action_2]
+    reviewers: [R2, R3]
+    quote: "REVIEWER QUOTE PENDING — per-gene calibration headline number"
+
+  - panel: fig1C
+    actions: [Action_2, Action_1]
+    reviewers: [R3]
+    quote: "REVIEWER QUOTE PENDING — AM-on-true-VUSs"
+
+  - panel: fig1D
+    actions: [Action_2]
+    reviewers: [R2]
+    quote: "REVIEWER QUOTE PENDING — gene-specific threshold map"
+
+  - panel: fig2A
+    actions: [Action_1, Action_2, Action_3]
+    reviewers: [R1, R2]
+    quote: "REVIEWER QUOTE PENDING — carrier landscape baseline"
+
+  - panel: fig2B
+    actions: [Action_1, Action_2]
+    reviewers: [R1, R2]
+    quote: "REVIEWER QUOTE PENDING — provenance breakdown"
+
+  - panel: fig2C
+    actions: [Action_2]
+    reviewers: [R2]
+    quote: "REVIEWER QUOTE PENDING — counterfactual under 0.864"
+
+  - panel: fig3A
+    actions: [Action_3, Action_4]
+    reviewers: [R1, R2]
+    quote: "REVIEWER QUOTE PENDING — expected-association replication (highest risk)"
+
+  - panel: fig3B
+    actions: [Action_4]
+    reviewers: [R1]
+    quote: "REVIEWER QUOTE PENDING — BRCA-paradox power question"
+
+  - panel: fig3C
+    actions: [Action_11]
+    reviewers: [R1]
+    quote: "REVIEWER QUOTE PENDING — MUTYH and MEN1 gene-level enrichment"
+
+  - panel: fig3D
+    actions: [Action_5]
+    reviewers: [R1, R3]
+    quote: "REVIEWER QUOTE PENDING — novel associations as hypothesis-generating"
+
+  - panel: fig4A
+    actions: [Action_6]
+    reviewers: [R1]
+    quote: "REVIEWER QUOTE PENDING — ancestry stratification"
+
+  - panel: fig4B
+    actions: [Action_6]
+    reviewers: [R1]
+    quote: "REVIEWER QUOTE PENDING — per-syndrome OR by ancestry"
+
+  - panel: fig4C
+    actions: [Action_6, Action_18]
+    reviewers: [R1]
+    quote: "REVIEWER QUOTE PENDING — PCA clustering of AM-only carriers"
+
+  - panel: fig5A
+    actions: [Action_8]
+    reviewers: [R1, R3]
+    quote: "REVIEWER QUOTE PENDING — cross-cohort replication"
+
+  - panel: fig5B
+    actions: [Action_8]
+    reviewers: [R1, R3]
+    quote: "REVIEWER QUOTE PENDING — meta-analyzed OR"
+
+  - panel: fig6A
+    actions: [user-requested]
+    reviewers: []
+    quote: "user ask: carrier frequency per phenotype, sorted descending"
+
+  - panel: fig6B
+    actions: [user-requested]
+    reviewers: []
+    quote: "user ask: phenotype x gene carrier frequency heatmap"
+
+  - panel: fig6C
+    actions: [user-requested, Action_6]
+    reviewers: []
+    quote: "user ask: ancestry-overall carrier-frequency bars"
+
+  - panel: fig6D
+    actions: [user-requested, Action_6]
+    reviewers: []
+    quote: "user ask: ancestry x phenotype heatmap"
+
+  - panel: fig6E
+    actions: [user-requested, Action_6]
+    reviewers: []
+    quote: "user ask: ancestry x gene heatmap"
+
+  - panel: Table3
+    actions: [Action_3]
+    reviewers: [R1, R2]
+    quote: "REVIEWER QUOTE PENDING — case-control x variant-category x FH x age (THE rebuttal table)"
+
+  - panel: Table4
+    actions: [Action_4]
+    reviewers: [R1, R2]
+    quote: "REVIEWER QUOTE PENDING — syndrome-level logistic-regression OR table"
+
+  - panel: TableS1
+    actions: [Action_9]
+    reviewers: [R1]
+    quote: "REVIEWER QUOTE PENDING — age-cutoff sensitivity"
+
+  - panel: TableS2
+    actions: [Action_13]
+    reviewers: []
+    quote: "AM false-negative variants vs ANNOVAR P/LP set"

@@ -1,0 +1,92 @@
+#!/bin/bash
+#BSUB -J biome_am_06_figures
+#BSUB -P acc_DiseaseGeneCell
+#BSUB -q premium
+#BSUB -n 4
+#BSUB -W 02:00
+#BSUB -R rusage[mem=16000]
+#BSUB -R span[hosts=1]
+#BSUB -o logs/06_make_figures.%J.stdout
+#BSUB -eo logs/06_make_figures.%J.stderr
+#BSUB -L /bin/bash
+# =============================================================================
+# 06_make_figures.lsf — render Figures 1-6 + supplementary placeholders into
+# $RESULTS/figures/. Cross-cohort (reads both cohort I + II results). Submit
+# AFTER 05_run_stats has finished for both cohorts.
+#
+# Required env: CONFIG_PATH (defaults to repo's config/config.yaml)
+# =============================================================================
+set -euo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"
+printf '[REPO_ROOT debug] BIOAM_REPO_ROOT=%q  LS_SUBCWD=%q  PWD=%q  HERE=%q\n' \
+    "${BIOAM_REPO_ROOT:-}" "${LS_SUBCWD:-}" "${PWD:-}" "${HERE:-}" >&2
+REPO_ROOT=""
+for cand in "${BIOAM_REPO_ROOT:-}" "${LS_SUBCWD:-}" "${PWD:-}" "${HERE:+$HERE/..}"; do
+    [[ -n "$cand" && -d "$cand/lib" && -f "$cand/lib/common.sh" ]] || continue
+    REPO_ROOT="$(cd "$cand" && pwd)"
+    break
+done
+if [[ -z "$REPO_ROOT" ]]; then
+    echo "ERROR: cannot find repo root. None of BIOAM_REPO_ROOT / LS_SUBCWD / PWD / HERE/.." >&2
+    echo "       contain lib/common.sh. Set BIOAM_REPO_ROOT=/path/to/repo and re-submit." >&2
+    exit 1
+fi
+echo "[REPO_ROOT] using: $REPO_ROOT" >&2
+source "$REPO_ROOT/lib/common.sh"
+source "$REPO_ROOT/lib/load_modules.sh"
+
+CONFIG_PATH="${CONFIG_PATH:-$REPO_ROOT/config/config.yaml}"
+export CONFIG_PATH
+cd "$REPO_ROOT"
+
+REFS="$(cfg_get paths.refs_dir)"
+RESULTS_ROOT="$(cfg_get paths.results_dir)"
+OUT="${RESULTS_ROOT}/figures"
+mkdir -p "$OUT"
+
+CHEN_SUBSET="${REFS}/chen_calibration.target_genes.tsv.gz"
+CHEN_SUMMARY="${REFS}/chen_summary_by_gene.tsv"
+CLINVAR_VCF="$(cfg_get references.clinvar_vcf_local 2>/dev/null || true)"
+COHORT_I_RESULTS="${RESULTS_ROOT}/cohortI"
+COHORT_II_RESULTS="${RESULTS_ROOT}/cohortII"
+
+log "fig1 — benchmark honestly"
+python3 -m python.figures.fig1_benchmark_honestly \
+    --chen-subset "$CHEN_SUBSET" \
+    --chen-summary "$CHEN_SUMMARY" \
+    ${CLINVAR_VCF:+--clinvar-vcf "$CLINVAR_VCF"} \
+    --out-dir "$OUT"
+
+log "fig2 — carrier landscape (using cohort I as primary)"
+python3 -m python.figures.fig2_carrier_landscape \
+    --c-table "${COHORT_I_RESULTS}/C_regression_matrix.tsv" \
+    --out-dir "$OUT"
+
+log "fig3 — case/control associations (cohort I)"
+python3 -m python.figures.fig3_case_control_associations \
+    --stats "${COHORT_I_RESULTS}/stats_syndrome_associations.tsv" \
+    --out-dir "$OUT"
+
+log "fig4 — ancestry stratified (cohort I)"
+python3 -m python.figures.fig4_ancestry_stratified \
+    --c-table "${COHORT_I_RESULTS}/C_regression_matrix.tsv" \
+    --out-dir "$OUT"
+
+log "fig5 — cohort I vs II replication"
+python3 -m python.figures.fig5_cohort_replication \
+    --stats-cohortI  "${COHORT_I_RESULTS}/stats_syndrome_associations.tsv" \
+    --stats-cohortII "${COHORT_II_RESULTS}/stats_syndrome_associations.tsv" \
+    --out-dir "$OUT"
+
+log "fig6 — descriptive landscape (cohort I; rerun with cohortII for the cross-cohort panels)"
+python3 -m python.figures.fig6_descriptive_landscape \
+    --c-table "${COHORT_I_RESULTS}/C_regression_matrix.tsv" \
+    --b-table "${COHORT_I_RESULTS}/B_ACMG_vs_AM_comparison.tsv" \
+    --out-dir "$OUT"
+
+log "supplementary placeholders S1..S7"
+python3 -m python.figures.suppl --out-dir "$OUT"
+
+log "06_make_figures: DONE -> $OUT"
+ls -la "$OUT"
