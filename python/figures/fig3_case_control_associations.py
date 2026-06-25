@@ -5,10 +5,13 @@ This is the highest-stakes figure of the rebuttal set (Action 4 is flagged
 ``results/<cohort>/stats_syndrome_associations.tsv`` produced by
 ``python/run_stats.py``.
 
-  3A  OR heatmap, 15 syndromes x N cancer phenotypes. Three sub-panels
-      {ACMG/AMP P/LP, AM-primary, AM-only-non-P/LP}. Canonical cells
-      (``is_canonical=True``) outlined in black. Color = log(OR), grey
-      for cells with n_carriers < 5 (NaN OR).
+  3A  OR heatmap, 15 syndromes x N cancer phenotypes. FOUR sub-panels
+      {ACMG/AMP P/LP, AM-primary, AM-only-non-P/LP, AM ≥ 0.864 (legacy
+      global threshold)}. The 4th sub-panel is the side-by-side evidence
+      that the new gene-specific method's ORs track ACMG's pattern more
+      closely than the old single-threshold definition did. Canonical
+      cells (``is_canonical=True``) outlined in black. Color = log(OR),
+      grey for cells with n_carriers < 5 (NaN OR).
 
   3B  Post-hoc power for the AM-only-non-P/LP cells: observed OR vs the
       minimum detectable OR at 80% power. Tells R1 whether a missing
@@ -42,7 +45,7 @@ from util import LOG  # noqa: E402
 
 from . import common
 
-VARIANT_CATEGORY_ORDER = ["ACMG_PLP", "AM_primary", "AM_only_non_PLP"]
+VARIANT_CATEGORY_ORDER = ["ACMG_PLP", "AM_primary", "AM_only_non_PLP", "AM_global_0864"]
 
 
 def _placeholder_panel(ax, msg: str) -> None:
@@ -226,17 +229,20 @@ def panel_3D(ax, df: "pd.DataFrame", top_n: int = 8, q_cutoff: float = 0.1) -> N
     ax.set_title(f"D  Novel hits  (q_BH < {q_cutoff})")
 
 
-def make(out_dir: str, *, stats: str) -> None:
+def make(out_dir: str, *, stats: str, cohort_name: Optional[str] = None) -> None:
     import matplotlib.pyplot as plt
     import pandas as pd
 
     common.apply_rcparams()
     df = pd.read_csv(stats, sep="\t")
-    fig = plt.figure(figsize=(common.FIG_WIDTH_DOUBLE[0],
+    # Layout: 4-col top row for panel 3A (one per variant category), 4-col
+    # bottom rows split for 3B/3C/3D — the extra column widens 3A enough to
+    # fit the new AM_global_0864 sub-panel without squeezing the labels.
+    fig = plt.figure(figsize=(common.FIG_WIDTH_DOUBLE[0] * 1.15,
                               common.FIG_WIDTH_DOUBLE[0] * 1.1))
-    gs = fig.add_gridspec(3, 3, height_ratios=[1.6, 1.0, 1.0],
+    gs = fig.add_gridspec(3, 4, height_ratios=[1.6, 1.0, 1.0],
                           hspace=0.6, wspace=0.5)
-    axesA = [fig.add_subplot(gs[0, j]) for j in range(3)]
+    axesA = [fig.add_subplot(gs[0, j]) for j in range(4)]
     axB   = fig.add_subplot(gs[1, 0])
     axC   = fig.add_subplot(gs[1, 1:])
     axD   = fig.add_subplot(gs[2, :])
@@ -244,9 +250,10 @@ def make(out_dir: str, *, stats: str) -> None:
     panel_3B(axB,   df)
     panel_3C(axC,   df)
     panel_3D(axD,   df)
-    common.save_both(fig, Path(out_dir), "fig3")
+    basename = f"fig3.{cohort_name}" if cohort_name else "fig3"
+    common.save_both(fig, Path(out_dir), basename)
     plt.close(fig)
-    LOG.info("fig3: wrote fig3.png + fig3.pdf to %s", out_dir)
+    LOG.info("fig3: wrote %s.png + %s.pdf to %s", basename, basename, out_dir)
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -254,8 +261,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--stats", required=True,
                     help="results/<cohort>/stats_syndrome_associations.tsv")
     ap.add_argument("--out-dir", required=True)
+    ap.add_argument("--cohort-name", default=None,
+                    help="if set, suffix output filenames with .<cohort> "
+                         "(e.g. fig3.cohortI.png) to keep cohorts separate")
     args = ap.parse_args(argv)
-    make(args.out_dir, stats=args.stats)
+    make(args.out_dir, stats=args.stats, cohort_name=args.cohort_name)
     return 0
 
 

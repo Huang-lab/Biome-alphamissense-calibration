@@ -67,6 +67,10 @@ VARIANT_CATEGORIES: List[Tuple[str, str]] = [
     ("ACMG",       "ACMG_PLP"),
     ("AMprimary",  "AM_primary"),
     ("AMonly",     "AM_only_non_PLP"),
+    # AM ≥ 0.864 (the old global threshold). Kept so Table 4 / Fig 3 can show,
+    # cell-by-cell, that the new gene-specific method's ORs track ACMG's
+    # pattern more closely than the legacy global threshold did.
+    ("AM0864",     "AM_global_0864"),
 ]
 
 CONTROL_GROUP_TOKENS: List[str] = ["control"]  # lowercase substring match

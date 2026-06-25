@@ -147,7 +147,7 @@ def panel_2C(ax, df) -> None:
     ax.legend(fontsize=6, loc="upper right")
 
 
-def make(out_dir: str, *, c_table: str) -> None:
+def make(out_dir: str, *, c_table: str, cohort_name: Optional[str] = None) -> None:
     import matplotlib.pyplot as plt
     import pandas as pd
     common.apply_rcparams()
@@ -158,17 +158,20 @@ def make(out_dir: str, *, c_table: str) -> None:
     panel_2B(axes[1], df)
     panel_2C(axes[2], df)
     fig.tight_layout()
-    common.save_both(fig, Path(out_dir), "fig2")
+    basename = f"fig2.{cohort_name}" if cohort_name else "fig2"
+    common.save_both(fig, Path(out_dir), basename)
     plt.close(fig)
-    LOG.info("fig2: wrote fig2.png + fig2.pdf to %s", out_dir)
+    LOG.info("fig2: wrote %s.png + %s.pdf to %s", basename, basename, out_dir)
 
 
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--c-table", required=True, help="C_regression_matrix.tsv")
     ap.add_argument("--out-dir", required=True)
+    ap.add_argument("--cohort-name", default=None,
+                    help="if set, suffix output filenames with .<cohort>")
     args = ap.parse_args(argv)
-    make(args.out_dir, c_table=args.c_table)
+    make(args.out_dir, c_table=args.c_table, cohort_name=args.cohort_name)
     return 0
 
 

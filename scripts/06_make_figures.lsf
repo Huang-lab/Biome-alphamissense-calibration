@@ -58,31 +58,48 @@ python3 -m python.figures.fig1_benchmark_honestly \
     ${CLINVAR_VCF:+--clinvar-vcf "$CLINVAR_VCF"} \
     --out-dir "$OUT"
 
-log "fig2 — carrier landscape (using cohort I as primary)"
-python3 -m python.figures.fig2_carrier_landscape \
-    --c-table "${COHORT_I_RESULTS}/C_regression_matrix.tsv" \
-    --out-dir "$OUT"
+# --- per-cohort figures: render BOTH cohorts; output filenames carry the
+#     cohort suffix (e.g. fig2.cohortI.png) so they don't overwrite each other.
+for cohort in cohortI cohortII; do
+    if [[ "$cohort" == "cohortI" ]]; then
+        CRES="$COHORT_I_RESULTS"
+    else
+        CRES="$COHORT_II_RESULTS"
+    fi
+    C_TABLE="${CRES}/C_regression_matrix.tsv"
+    B_TABLE="${CRES}/B_ACMG_vs_AM_comparison.tsv"
+    STATS="${CRES}/stats_syndrome_associations.tsv"
+    if [[ ! -f "$C_TABLE" ]]; then
+        log "WARN: ${cohort}'s C_regression_matrix missing at $C_TABLE — skipping figs 2/4/6 for ${cohort}"
+        continue
+    fi
 
-log "fig3 — case/control associations (cohort I)"
-python3 -m python.figures.fig3_case_control_associations \
-    --stats "${COHORT_I_RESULTS}/stats_syndrome_associations.tsv" \
-    --out-dir "$OUT"
+    log "fig2 — carrier landscape (${cohort})"
+    python3 -m python.figures.fig2_carrier_landscape \
+        --c-table "$C_TABLE" --out-dir "$OUT" --cohort-name "$cohort"
 
-log "fig4 — ancestry stratified (cohort I)"
-python3 -m python.figures.fig4_ancestry_stratified \
-    --c-table "${COHORT_I_RESULTS}/C_regression_matrix.tsv" \
-    --out-dir "$OUT"
+    if [[ -f "$STATS" ]]; then
+        log "fig3 — case/control associations (${cohort})"
+        python3 -m python.figures.fig3_case_control_associations \
+            --stats "$STATS" --out-dir "$OUT" --cohort-name "$cohort"
+    else
+        log "WARN: ${cohort}'s stats_syndrome_associations.tsv missing — skipping fig3 for ${cohort}"
+    fi
 
-log "fig5 — cohort I vs II replication"
+    log "fig4 — ancestry stratified (${cohort})"
+    python3 -m python.figures.fig4_ancestry_stratified \
+        --c-table "$C_TABLE" --out-dir "$OUT" --cohort-name "$cohort"
+
+    log "fig6 — descriptive landscape (${cohort})"
+    python3 -m python.figures.fig6_descriptive_landscape \
+        --c-table "$C_TABLE" --b-table "$B_TABLE" --out-dir "$OUT" --cohort-name "$cohort"
+done
+
+# --- cross-cohort: fig5 reads BOTH cohorts' stats tables --------------------
+log "fig5 — cohort I vs II replication (cross-cohort)"
 python3 -m python.figures.fig5_cohort_replication \
     --stats-cohortI  "${COHORT_I_RESULTS}/stats_syndrome_associations.tsv" \
     --stats-cohortII "${COHORT_II_RESULTS}/stats_syndrome_associations.tsv" \
-    --out-dir "$OUT"
-
-log "fig6 — descriptive landscape (cohort I; rerun with cohortII for the cross-cohort panels)"
-python3 -m python.figures.fig6_descriptive_landscape \
-    --c-table "${COHORT_I_RESULTS}/C_regression_matrix.tsv" \
-    --b-table "${COHORT_I_RESULTS}/B_ACMG_vs_AM_comparison.tsv" \
     --out-dir "$OUT"
 
 log "supplementary placeholders S1..S7"

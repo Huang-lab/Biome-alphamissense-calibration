@@ -124,7 +124,7 @@ def panel_4C(ax, df) -> None:
     ax.set_title("C  PC1 x PC2  (AM-only carriers highlighted)")
 
 
-def make(out_dir: str, *, c_table: str) -> None:
+def make(out_dir: str, *, c_table: str, cohort_name: Optional[str] = None) -> None:
     import matplotlib.pyplot as plt
     import pandas as pd
     common.apply_rcparams()
@@ -135,17 +135,20 @@ def make(out_dir: str, *, c_table: str) -> None:
     panel_4B(axes[1])
     panel_4C(axes[2], df)
     fig.tight_layout()
-    common.save_both(fig, Path(out_dir), "fig4")
+    basename = f"fig4.{cohort_name}" if cohort_name else "fig4"
+    common.save_both(fig, Path(out_dir), basename)
     plt.close(fig)
-    LOG.info("fig4: wrote fig4.png + fig4.pdf to %s", out_dir)
+    LOG.info("fig4: wrote %s.png + %s.pdf to %s", basename, basename, out_dir)
 
 
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--c-table", required=True)
     ap.add_argument("--out-dir", required=True)
+    ap.add_argument("--cohort-name", default=None,
+                    help="if set, suffix output filenames with .<cohort>")
     args = ap.parse_args(argv)
-    make(args.out_dir, c_table=args.c_table)
+    make(args.out_dir, c_table=args.c_table, cohort_name=args.cohort_name)
     return 0
 
 

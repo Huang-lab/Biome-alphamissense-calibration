@@ -241,7 +241,8 @@ def panel_6E(ax, b_df, c_df) -> None:
     ax.set_title("E  Ancestry x gene  (AM-primary freq)")
 
 
-def make(out_dir: str, *, c_table: str, b_table: Optional[str] = None) -> None:
+def make(out_dir: str, *, c_table: str, b_table: Optional[str] = None,
+         cohort_name: Optional[str] = None) -> None:
     import matplotlib.pyplot as plt
     import pandas as pd
     common.apply_rcparams()
@@ -262,9 +263,10 @@ def make(out_dir: str, *, c_table: str, b_table: Optional[str] = None) -> None:
     panel_6B(fig.add_subplot(gs[1, :]), b_df, c_df)
     panel_6D(fig.add_subplot(gs[2, 0]), c_df)
     panel_6E(fig.add_subplot(gs[2, 1]), b_df, c_df)
-    common.save_both(fig, Path(out_dir), "fig6")
+    basename = f"fig6.{cohort_name}" if cohort_name else "fig6"
+    common.save_both(fig, Path(out_dir), basename)
     plt.close(fig)
-    LOG.info("fig6: wrote fig6.png + fig6.pdf to %s", out_dir)
+    LOG.info("fig6: wrote %s.png + %s.pdf to %s", basename, basename, out_dir)
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -272,8 +274,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--c-table", required=True)
     ap.add_argument("--b-table", default=None)
     ap.add_argument("--out-dir", required=True)
+    ap.add_argument("--cohort-name", default=None,
+                    help="if set, suffix output filenames with .<cohort>")
     args = ap.parse_args(argv)
-    make(args.out_dir, c_table=args.c_table, b_table=args.b_table)
+    make(args.out_dir, c_table=args.c_table, b_table=args.b_table,
+         cohort_name=args.cohort_name)
     return 0
 
 
