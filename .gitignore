@@ -14,6 +14,19 @@ logs/*.stderr
 # local test-run artifacts
 tests/run/
 
+# Sensitive — patient-identifiable BioMe data; never commit. Belt-and-suspenders
+# in case anything escapes intermediate/ or results/. tests/data/*.vcf are synthetic
+# fixtures (sample IDs S1..S6) and are intentionally kept tracked.
+**/Regen*VariantsInSamples*.tsv
+**/Sema4*VariantsInSamples*.tsv
+**/*WXS_HX_Newgroups*.tsv
+**/Masked_mrn_map*.txt
+**/GSA_GDA_PCA*.txt
+**/A_variant_master.tsv
+**/B_carriers_per_sample.tsv
+**/B_summary_by_gene.tsv
+**/C_regression_matrix.tsv
+
 # python / editor noise
 __pycache__/
 *.pyc

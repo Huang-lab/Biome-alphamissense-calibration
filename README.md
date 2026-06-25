@@ -104,6 +104,26 @@ Both `01_qc_missense` and `02_annotate_am` are array steps and can be re-run per
 - **bcftools filter syntax** (per-version differences): `lib/common.sh::build_qc_expr`. The script's banner prints `bcftools --version` and pokes the expression at job start so a mismatch fails fast.
 - **Gene panel / Table S5 groups**: `config.yaml > target_genes` and `gene_groups`.
 
+## Sensitive data + git hygiene
+
+The phenotype TSVs, the masked-MRN bridge, the PCA file, and any Tables A/B/C
+derived from real BioMe samples are **patient-identifiable** and must never
+land in git. Two layers of defense:
+
+1. `.gitignore` blocks the filename patterns directly (real-data file names plus
+   `intermediate/` and `results/`). Synthetic fixtures under `tests/data/` are
+   intentionally allowed.
+2. **Install the pre-commit hook** in each clone before committing:
+   ```bash
+   ln -sf ../../scripts/pre-commit.sh .git/hooks/pre-commit
+   chmod +x .git/hooks/pre-commit
+   ```
+   The hook rejects staged paths matching the real-data patterns and scans
+   staged content for `SINAI_*` IDs and the MRN-map header. Run
+   `bash scripts/pre-commit.sh` directly to test.
+
+If a sensitive file ever slips in, halt and rewrite history before pushing.
+
 ## Hardware / environment
 
 - **CPU only.** GPU not used: this is `bcftools` streaming + pandas joins; no model inference, no GPU-amenable workload here. AM scores are precomputed in the public table.
