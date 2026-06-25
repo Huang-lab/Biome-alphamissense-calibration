@@ -101,27 +101,38 @@ def main() -> None:
     log(f"PC columns kept: {pc_cols_present}")
 
     # ---- ensure MASKED_MRN is on the matrix ---------------------------------
+    # Matrix's per-sample identifier lives in `sample_id` (set by step 04).
+    # For cohort I, values look like `SINAI_<digits>_<alphanum>` and need to be
+    # bridged through Masked_mrn_map.txt to reach MASKED_MRN.
+    # For cohort II, `sample_id` IS MASKED_MRN already (no bridge needed).
+    MATRIX_ID = "sample_id"
+    if MATRIX_ID not in mat.columns:
+        raise SystemExit(
+            f"matrix is missing the {MATRIX_ID!r} column. "
+            f"Available columns: {list(mat.columns)[:20]}..."
+        )
+
     if "MASKED_MRN" not in mat.columns:
         if not use_bridge:
-            raise SystemExit(
-                f"matrix has no MASKED_MRN column and id_bridge.use_for.{args.cohort} is false. "
-                f"Either enable the bridge or rebuild the matrix to include MASKED_MRN."
-            )
-        if not bridge_path or not bridge_path.is_file():
-            raise SystemExit(f"bridge file required but not found: {bridge_path}")
-        bridge = pd.read_csv(bridge_path, sep="\t", dtype=str)
-        log(f"bridge: {len(bridge):,} rows, columns = {list(bridge.columns)}")
-        if sinai_col not in bridge.columns or mrn_col not in bridge.columns:
-            raise SystemExit(f"bridge missing {sinai_col!r} or {mrn_col!r}: {list(bridge.columns)}")
-        if "SINAI_ID" not in mat.columns:
-            raise SystemExit("matrix has neither MASKED_MRN nor SINAI_ID — cannot join PCs.")
-        b = bridge[[sinai_col, mrn_col]].rename(columns={sinai_col: "SINAI_ID", mrn_col: "MASKED_MRN"})
-        b = b.drop_duplicates("SINAI_ID")
-        mat = mat.merge(b, on="SINAI_ID", how="left")
-        rate = mat["MASKED_MRN"].notna().mean()
-        log(f"bridge join: SINAI_ID -> MASKED_MRN match = {rate:.1%}")
-        if rate < 0.5:
-            log("WARNING: bridge match rate < 50% — check SINAI_ID format vs RGNID format")
+            # Cohort II: sample_id is already MASKED_MRN. Promote it.
+            mat["MASKED_MRN"] = mat[MATRIX_ID].astype(str).str.strip()
+            log(f"no bridge configured for {args.cohort}; treating {MATRIX_ID} as MASKED_MRN directly")
+        else:
+            if not bridge_path or not bridge_path.is_file():
+                raise SystemExit(f"bridge file required but not found: {bridge_path}")
+            bridge = pd.read_csv(bridge_path, sep="\t", dtype=str)
+            log(f"bridge: {len(bridge):,} rows, columns = {list(bridge.columns)}")
+            if sinai_col not in bridge.columns or mrn_col not in bridge.columns:
+                raise SystemExit(f"bridge missing {sinai_col!r} or {mrn_col!r}: {list(bridge.columns)}")
+            b = bridge[[sinai_col, mrn_col]].rename(columns={sinai_col: MATRIX_ID, mrn_col: "MASKED_MRN"})
+            b[MATRIX_ID] = b[MATRIX_ID].astype(str).str.strip()
+            b = b.drop_duplicates(MATRIX_ID)
+            mat[MATRIX_ID] = mat[MATRIX_ID].astype(str).str.strip()
+            mat = mat.merge(b, on=MATRIX_ID, how="left")
+            rate = mat["MASKED_MRN"].notna().mean()
+            log(f"bridge join: {MATRIX_ID} -> MASKED_MRN match = {rate:.1%}")
+            if rate < 0.5:
+                log(f"WARNING: bridge match rate < 50% — check {MATRIX_ID} format vs {sinai_col} format")
 
     # ---- pick the PC-file column that joins on MASKED_MRN -------------------
     mrn_values = set(mat["MASKED_MRN"].dropna().astype(str).str.strip())
