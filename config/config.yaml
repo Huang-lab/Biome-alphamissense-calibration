@@ -45,6 +45,12 @@ calibration:
   min_evidence_strength: "Moderate"
   # Locked: only the published Chen label drives the primary call.
   primary_threshold: "gene_specific"   # one of: gene_specific
+  # Counterfactual: the published global threshold from the original BioMe
+  # AM analysis. step 03 emits is_AM_carrier_global_0864 = (am_pathogenicity >=
+  # this) regardless of Chen calibration, so figures can compare what the old
+  # threshold would have called vs the gene-specific calibration we now use.
+  # Independent of primary_threshold — purely descriptive.
+  global_threshold_legacy: 0.864
 
 # -- Target gene panel (28 genes; locked; SDHD present) -----------------------
 target_genes:
@@ -132,10 +138,28 @@ cohorts:
 # -- Ancestry PCs (shared) ----------------------------------------------------
 pcs:
   pcs_tsv: "/sc/arion/projects/rg_huangk06/variants_PLP_BioMe/GSA_GDA_PCA_V2.txt"
-  # ID column is DISCOVERED at runtime by intersecting header tokens with
-  # phenotype IDs; this can be overridden here if needed.
-  id_column: ""                   # "" = auto-discover
+  # The real BioMe PC file keys on MASKED_MRN. Cohort II's phenotype keys on
+  # MASKED_MRN directly, so its PC join is straight. Cohort I's phenotype keys
+  # on SINAI_ID — it joins to PCs via the id_bridge below
+  # (SINAI_ID -> MASKED_MRN -> PC1..10).
+  id_column: "MASKED_MRN"
+  # Auto-discovery fallback runs when id_column is empty AND no bridge is
+  # configured (e.g. synthetic tests where PCs key directly on phenotype IDs).
   pc_columns: ["PC1","PC2","PC3","PC4","PC5","PC6","PC7","PC8","PC9","PC10"]
+
+# -- ID bridge ---------------------------------------------------------------
+# Required for cohort I's PC join. The bridge is a TSV with columns matching
+# map_sinai_id_col and map_masked_mrn_col. Each cohort can opt out by leaving
+# its `use_bridge` flag false; cohort II's phenotype already keys on
+# MASKED_MRN so no bridge is needed.
+id_bridge:
+  masked_mrn_map: "/sc/arion/projects/rg_huangk06/variants_PLP_BioMe/Masked_mrn_map.txt"
+  map_sinai_id_col: "RGNID"
+  map_masked_mrn_col: "MASKED_MRN"
+  # Cohort -> whether to use the bridge for the PC join.
+  use_for:
+    cohortI: true
+    cohortII: false
 
 # -- ACMG comparison ----------------------------------------------------------
 acmg:

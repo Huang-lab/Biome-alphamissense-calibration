@@ -627,6 +627,14 @@ def main(argv: Optional[List[str]] = None) -> int:
                  "applied its gene-specific or domain-aggregate calibration curve to every variant "
                  "in the table.")
     lines.append("")
+    lines.append("**Note on the Chen subset.** `refs/chen_calibration.target_genes.tsv.gz` "
+                 "contains *every* Chen row for the 28 target genes, including BP4_* "
+                 "(anti-pathogenic) and PP3_Supporting rows — the `min_evidence_strength` "
+                 "filter is applied downstream by `call_carriers.py`, not in the subset. "
+                 "This means downstream analyses that need the full evidence distribution "
+                 "(e.g. per-gene FPR at the global 0.864 threshold, false-negative supplementary "
+                 "figures) can read the subset directly without re-fetching.")
+    lines.append("")
     lines.append(f"## Target panel ({len(target_genes)} genes)")
     lines.append("")
     lines.append("| gene | AM_transcript_found | coordinates_resolved | n_variants_in_Chen | "

@@ -7,6 +7,11 @@ that step 02 attached, and:
 - `is_AM_carrier_primary = TRUE` iff the label is in the configured
   positive set (default: PP3_Moderate, PP3_Moderate+, PP3_Strong, PP3_Strong+,
   PP3_VeryStrong).
+- `is_AM_carrier_global_0864 = TRUE` iff am_pathogenicity >=
+  calibration.global_threshold_legacy (default 0.864). This is the
+  counterfactual the rebuttal letter relies on — what the original global
+  threshold would have called, regardless of Chen calibration. Independent
+  of `is_AM_carrier_primary`.
 - `would_be_carrier_domain_aggregate = TRUE` is informational — TRUE iff
   `is_AM_carrier_primary` AND `chen_calibration_approach == domain_aggregate`.
 - `threshold_source` is one of:
@@ -76,6 +81,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     cfg = load_config(args.config)
     min_strength = cfg.get("calibration", {}).get("min_evidence_strength", "Moderate")
     positive_set = evidence_set_for(min_strength)
+    global_legacy = float(cfg.get("calibration", {}).get("global_threshold_legacy", 0.864))
 
     # The locked spec says primary_threshold MUST be the published Chen label —
     # we honor `primary_threshold` if present for symmetry, but the only
@@ -97,13 +103,15 @@ def main(argv: Optional[List[str]] = None) -> int:
         "chen_evidence", "chen_points", "chen_calibration_approach",
         "chen_domain", "chen_vep_score", "in_chen_table",
         "threshold_source", "genotype", "DP", "GQ", "passes_QC",
-        "is_AM_carrier_primary", "would_be_carrier_domain_aggregate",
+        "is_AM_carrier_primary", "is_AM_carrier_global_0864",
+        "would_be_carrier_domain_aggregate",
     ]
     out_rows: List[List[str]] = []
     n_primary_single = 0
     n_primary_domain = 0
     n_subthreshold = 0
     n_not_in_chen = 0
+    n_global_legacy = 0
     for r in rows:
         in_chen = (r.get("in_chen_table", "") or "").strip().upper() == "TRUE"
         ev = _normalize_evidence(r.get("chen_evidence", ""))
@@ -132,6 +140,15 @@ def main(argv: Optional[List[str]] = None) -> int:
             n_subthreshold += 1
             is_primary = False
             would_da = False
+        # Counterfactual under the original global threshold. Independent of
+        # Chen membership — variants not in Chen still get this flag.
+        amp_raw = (r.get("am_pathogenicity", "") or "").strip()
+        try:
+            is_global = float(amp_raw) >= global_legacy
+        except ValueError:
+            is_global = False
+        if is_global:
+            n_global_legacy += 1
         out_rows.append([
             r.get("sample_id", ""), id_col, args.cohort,
             r.get("chr", ""), r.get("pos", ""), r.get("ref", ""), r.get("alt", ""),
@@ -145,14 +162,16 @@ def main(argv: Optional[List[str]] = None) -> int:
             r.get("genotype", ""), r.get("DP", ""), r.get("GQ", ""),
             "TRUE",
             "TRUE" if is_primary else "FALSE",
+            "TRUE" if is_global else "FALSE",
             "TRUE" if would_da else "FALSE",
         ])
 
     write_tsv(args.out, out_header, out_rows)
     LOG.info("%s call_carriers: rows=%d  primary_single=%d  primary_domain=%d  "
-             "subthreshold=%d  not_in_chen=%d  (min_strength=%s)",
+             "subthreshold=%d  not_in_chen=%d  global_legacy(>=%.3f)=%d  (min_strength=%s)",
              args.cohort, len(out_rows),
-             n_primary_single, n_primary_domain, n_subthreshold, n_not_in_chen, min_strength)
+             n_primary_single, n_primary_domain, n_subthreshold, n_not_in_chen,
+             global_legacy, n_global_legacy, min_strength)
     return 0
 
 

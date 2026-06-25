@@ -1,6 +1,7 @@
 """Behavioral assertions for the synthetic test run.
 
-8 cases (spec 7 + AB-filter syntax), updated for the Chen per-variant lookup:
+10 cases (spec 7 + AB-filter syntax + global-0864 counterfactual + Table C
+carrier columns), updated for the Chen per-variant lookup:
   1. BRCA1 (S1@chr1:150) — Chen PP3_Moderate / single_gene → primary=TRUE,
      threshold_source=single_gene
   2. MEN1  (S1@chr2:550) — Chen PP3_Moderate+ / domain_aggregate → primary=TRUE
@@ -14,6 +15,10 @@
   6. QC fail — S4 (DP=5 het) absent from Table A at chr1:150
   7. gVCF guard — checked in run_test.sh
   8. AB filter — chr1:200 S1 (AD=20,20) present; chr1:200 S3 (AD=19,1) absent
+  9. is_AM_carrier_global_0864 column present in Table A; TRUE iff
+     am_pathogenicity >= 0.864 regardless of Chen membership.
+ 10. carrier_<group>_AM0864 column present in Table C; reflects the per-group
+     OR of the global-legacy carrier flag across the group's genes.
 """
 from __future__ import annotations
 
@@ -138,6 +143,38 @@ def main(argv=None):
     r2 = find_row(a2_rows, sample_id="M1", chr="chr1", pos="150", gene="BRCA1")
     assert_case("bonus: Cohort II (sliced_from_combined) produced AM-primary row for M1@chr1:150/BRCA1",
                 r2 is not None and r2["is_AM_carrier_primary"].upper() == "TRUE")
+
+    # Case 9: is_AM_carrier_global_0864 counterfactual column.
+    # Fixture mini_AM has BRCA1@chr1:150 at am=0.900 (>=0.864) and BRCA1@chr1:200
+    # at am=0.700 (<0.864). MEN1@chr2:550 at am=0.500 (<0.864) — so even
+    # though it's a Chen primary carrier, the global-legacy flag is FALSE.
+    r_brca = find_row(a_rows, sample_id="S1", chr="chr1", pos="150", gene="BRCA1")
+    r_brca_low = find_row(a_rows, sample_id="S1", chr="chr1", pos="200", gene="BRCA1")
+    r_men1 = find_row(a_rows, sample_id="S1", chr="chr2", pos="550", gene="MEN1")
+    assert_case("case 9: is_AM_carrier_global_0864 column present in Table A",
+                r_brca is not None and "is_AM_carrier_global_0864" in r_brca)
+    assert_case("case 9: BRCA1 S1@chr1:150 (am=0.900) -> is_AM_carrier_global_0864=TRUE",
+                r_brca is not None and r_brca["is_AM_carrier_global_0864"].upper() == "TRUE",
+                f"got {r_brca and r_brca.get('is_AM_carrier_global_0864')!r}")
+    assert_case("case 9: BRCA1 S1@chr1:200 (am=0.700) -> is_AM_carrier_global_0864=FALSE",
+                r_brca_low is not None and r_brca_low["is_AM_carrier_global_0864"].upper() == "FALSE")
+    assert_case("case 9: MEN1 S1@chr2:550 (am=0.500, primary=TRUE) -> global_0864=FALSE "
+                "(primary and global are independent counterfactuals)",
+                r_men1 is not None
+                and r_men1["is_AM_carrier_primary"].upper() == "TRUE"
+                and r_men1["is_AM_carrier_global_0864"].upper() == "FALSE")
+
+    # Case 10: per-group AM0864 carrier columns in Table C.
+    c_brca_row = find_row(c_rows, sample_id="S1")
+    assert_case("case 10: Table C has carrier_<group>_AM0864 columns",
+                c_brca_row is not None
+                and "carrier_Hereditary_Breast_and_Ovarian_Cancer_Syndrome_AM0864" in c_brca_row)
+    assert_case("case 10: S1 has carrier_HBOC_AM0864=TRUE (BRCA1 am=0.900)",
+                c_brca_row is not None
+                and c_brca_row["carrier_Hereditary_Breast_and_Ovarian_Cancer_Syndrome_AM0864"].upper() == "TRUE")
+    assert_case("case 10: S1 has carrier_MEN_AM0864=FALSE (MEN1 am=0.500 < 0.864)",
+                c_brca_row is not None
+                and c_brca_row["carrier_Multiple_Endocrine_Neoplasia_AM0864"].upper() == "FALSE")
 
     print("\nALL ASSERTIONS PASSED")
     return 0

@@ -79,11 +79,35 @@ def main(argv: Optional[List[str]] = None) -> int:
     rep = report_join(vcf_sample_ids, pheno_ids, label=f"{args.cohort}:VCF↔phenotype on {id_col}")
     rep.log(f"{args.cohort}:VCF↔phenotype")
 
+    # ---- ID bridge (cohort I's PCs key on MASKED_MRN; phenotype keys on
+    # SINAI_ID; bridge file maps one to the other). Cohort II opts out. ------
+    bridge_cfg = cfg.get("id_bridge") or {}
+    bridge_used = False
+    sinai_to_masked: Dict[str, str] = {}
+    if bridge_cfg.get("use_for", {}).get(args.cohort, False):
+        bridge_path = bridge_cfg.get("masked_mrn_map", "") or ""
+        if not bridge_path or not os.path.isfile(bridge_path):
+            LOG.warning("id_bridge.use_for.%s=true but bridge file missing at %r; "
+                        "PC join will fall back to direct lookup", args.cohort, bridge_path)
+        else:
+            sinai_col = bridge_cfg.get("map_sinai_id_col", "RGNID")
+            mrn_col = bridge_cfg.get("map_masked_mrn_col", "MASKED_MRN")
+            _, br_rows = read_tsv_dicts(bridge_path)
+            for br in br_rows:
+                sid = (br.get(sinai_col) or "").strip()
+                mrn = (br.get(mrn_col) or "").strip()
+                if sid and mrn:
+                    sinai_to_masked[sid] = mrn
+            bridge_used = True
+            LOG.info("id_bridge %s: loaded %d %s->%s pairs from %s",
+                     args.cohort, len(sinai_to_masked), sinai_col, mrn_col, bridge_path)
+
     # ---- PCs ---------------------------------------------------------------
     pc_header: List[str] = []
     pc_rows: List[dict] = []
     pc_by_id: Dict[str, dict] = {}
     pc_id_col: Optional[str] = None
+    rep_pc = None
     if not os.path.isfile(pcs_path):
         LOG.warning("PCs file not found at %s; C matrix will leave PC1..PC10 empty", pcs_path)
     else:
@@ -104,9 +128,21 @@ def main(argv: Optional[List[str]] = None) -> int:
             LOG.info("PC id column auto-discovered: %r (overlap=%d in first 200 rows)", pc_id_col, best_overlap)
         if pc_id_col:
             pc_by_id = {(r.get(pc_id_col) or "").strip(): r for r in pc_rows if r.get(pc_id_col)}
-            rep_pc = report_join(pheno_ids, list(pc_by_id.keys()),
-                                 label=f"{args.cohort}:phenotype↔PCs on {pc_id_col}")
-            rep_pc.log(f"{args.cohort}:phenotype↔PCs")
+            # If we're routing through the bridge, the PC join keys are MASKED_MRN
+            # values, so report match-rate against the bridge image of phenotype
+            # IDs (not the SINAI_IDs themselves).
+            if bridge_used:
+                phen_in_pc_space = [sinai_to_masked.get(s, "") for s in pheno_ids]
+                phen_in_pc_space = [s for s in phen_in_pc_space if s]
+                rep_pc = report_join(
+                    phen_in_pc_space, list(pc_by_id.keys()),
+                    label=f"{args.cohort}:phenotype(via_bridge)↔PCs on {pc_id_col}",
+                )
+                rep_pc.log(f"{args.cohort}:phenotype(via_bridge)↔PCs")
+            else:
+                rep_pc = report_join(pheno_ids, list(pc_by_id.keys()),
+                                     label=f"{args.cohort}:phenotype↔PCs on {pc_id_col}")
+                rep_pc.log(f"{args.cohort}:phenotype↔PCs")
 
     # ---- ACMG --------------------------------------------------------------
     acmg_carrier_by_gene: Dict[str, Set[str]] = defaultdict(set)
@@ -137,11 +173,16 @@ def main(argv: Optional[List[str]] = None) -> int:
     else:
         LOG.warning("ACMG file not found at %s; B comparison will be empty", acmg_path)
 
-    # ---- AM-primary carriers by gene ---------------------------------------
+    # ---- AM-primary + AM-global-0864 carriers by gene ----------------------
     am_primary_by_gene: Dict[str, Set[str]] = defaultdict(set)
+    am_global_0864_by_gene: Dict[str, Set[str]] = defaultdict(set)
     for r in a_rows:
+        gene_u = (r.get("gene") or "").upper()
+        sample = r.get("sample_id", "")
         if _truthy(r.get("is_AM_carrier_primary", "")):
-            am_primary_by_gene[(r.get("gene") or "").upper()].add(r.get("sample_id", ""))
+            am_primary_by_gene[gene_u].add(sample)
+        if _truthy(r.get("is_AM_carrier_global_0864", "")):
+            am_global_0864_by_gene[gene_u].add(sample)
 
     # ---- B_ACMG_vs_AM_comparison ------------------------------------------
     b_header = list(a_header) + ["in_ACMG_PLP", "in_AM_primary", "category"]
@@ -199,12 +240,17 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     # ---- C_regression_matrix ----------------------------------------------
     # samples = phenotype rows (so cohort sample set is well-defined); join AM/ACMG carrier flags.
-    # per-group columns: carrier_<grp>_ACMG, carrier_<grp>_AMprimary, carrier_<grp>_AMonly
+    # per-group columns: carrier_<grp>_{ACMG,AMprimary,AMonly,AM0864}
     group_names = list(groups.keys())
     c_header = ["sample_id", "cohort", "Group", "Age_at_diagnosis", "Age2", "GENDER", "genetically_determined"] \
                + pc_cols
     for grp in group_names:
-        c_header += [f"carrier_{grp}_ACMG", f"carrier_{grp}_AMprimary", f"carrier_{grp}_AMonly"]
+        c_header += [
+            f"carrier_{grp}_ACMG",
+            f"carrier_{grp}_AMprimary",
+            f"carrier_{grp}_AMonly",
+            f"carrier_{grp}_AM0864",
+        ]
 
     c_rows: List[List[str]] = []
     for sample, prow in pheno_by_id.items():
@@ -217,8 +263,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         line = [sample, args.cohort,
                 prow.get("Group", ""), age_raw, age2,
                 prow.get("GENDER", ""), prow.get("genetically_determined", "")]
-        # PCs
-        prec = pc_by_id.get(sample, {})
+        # PCs — look up by the bridge image when configured, else direct.
+        pc_lookup_id = sinai_to_masked.get(sample, "") if bridge_used else sample
+        prec = pc_by_id.get(pc_lookup_id, {})
         for pc in pc_cols:
             line.append(prec.get(pc, ""))
         # group carriers
@@ -227,9 +274,11 @@ def main(argv: Optional[List[str]] = None) -> int:
             acmg_hit = any(sample in acmg_carrier_by_gene.get(g, set()) for g in grp_genes)
             am_hit   = any(sample in am_primary_by_gene.get(g, set())   for g in grp_genes)
             am_only  = am_hit and not acmg_hit
+            am0864   = any(sample in am_global_0864_by_gene.get(g, set()) for g in grp_genes)
             line += ["TRUE" if acmg_hit else "FALSE",
                      "TRUE" if am_hit   else "FALSE",
-                     "TRUE" if am_only  else "FALSE"]
+                     "TRUE" if am_only  else "FALSE",
+                     "TRUE" if am0864   else "FALSE"]
         c_rows.append(line)
 
     write_tsv(os.path.join(out_dir, "C_regression_matrix.tsv"), c_header, c_rows)
@@ -242,7 +291,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         fh.write(f"- VCF↔phenotype match rate ({id_col}): **{rep.match_rate:.3f}**  "
                  f"(matched={rep.matched}/{rep.left_n}; phenotype rows={rep.right_n})\n")
         if pc_id_col:
-            fh.write(f"- PC id column: `{pc_id_col}`\n")
+            fh.write(f"- PC id column: `{pc_id_col}`"
+                     f"{'  (via id_bridge: SINAI_ID -> MASKED_MRN)' if bridge_used else ''}\n")
+            if rep_pc is not None:
+                fh.write(f"- phenotype↔PC match rate: **{rep_pc.match_rate:.3f}**  "
+                         f"(matched={rep_pc.matched}/{rep_pc.left_n})\n")
         fh.write(f"- ACMG P/LP rows kept: **{acmg_rows_kept}**; PTV-only excluded: **{acmg_rows_excluded_ptv}**\n")
         fh.write(f"- Table A rows (per sample × variant): **{len(a_rows)}**\n")
         fh.write(f"- Table B rows (union AM/ACMG carriers): **{len(b_rows)}**\n")
