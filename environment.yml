@@ -12,3 +12,9 @@ dependencies:
   - numpy>=1.24
   - pyyaml>=6.0
   - requests>=2.31
+  # rebuttal-stats stack (run_stats.py + figures/*.py)
+  - scipy>=1.10
+  - statsmodels>=0.14
+  - matplotlib>=3.7
+  - seaborn>=0.13
+  - scikit-learn>=1.3

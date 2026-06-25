@@ -1,0 +1,49 @@
+#!/bin/bash
+#BSUB -J biome_am_05
+#BSUB -P acc_DiseaseGeneCell
+#BSUB -q premium
+#BSUB -n 4
+#BSUB -W 02:00
+#BSUB -R rusage[mem=16000]
+#BSUB -R span[hosts=1]
+#BSUB -o logs/05_run_stats.%J.stdout
+#BSUB -eo logs/05_run_stats.%J.stderr
+#BSUB -L /bin/bash
+# =============================================================================
+# 05_run_stats.lsf — produce the syndrome-level OR table from
+# C_regression_matrix.tsv. Runs per cohort; submit one job per cohort.
+#
+# Required env: COHORT, CONFIG_PATH
+# =============================================================================
+set -euo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"
+printf '[REPO_ROOT debug] BIOAM_REPO_ROOT=%q  LS_SUBCWD=%q  PWD=%q  HERE=%q\n' \
+    "${BIOAM_REPO_ROOT:-}" "${LS_SUBCWD:-}" "${PWD:-}" "${HERE:-}" >&2
+REPO_ROOT=""
+for cand in "${BIOAM_REPO_ROOT:-}" "${LS_SUBCWD:-}" "${PWD:-}" "${HERE:+$HERE/..}"; do
+    [[ -n "$cand" && -d "$cand/lib" && -f "$cand/lib/common.sh" ]] || continue
+    REPO_ROOT="$(cd "$cand" && pwd)"
+    break
+done
+if [[ -z "$REPO_ROOT" ]]; then
+    echo "ERROR: cannot find repo root. None of BIOAM_REPO_ROOT / LS_SUBCWD / PWD / HERE/.." >&2
+    echo "       contain lib/common.sh. Set BIOAM_REPO_ROOT=/path/to/repo and re-submit." >&2
+    exit 1
+fi
+echo "[REPO_ROOT] using: $REPO_ROOT" >&2
+source "$REPO_ROOT/lib/common.sh"
+source "$REPO_ROOT/lib/load_modules.sh"
+
+CONFIG_PATH="${CONFIG_PATH:-$REPO_ROOT/config/config.yaml}"
+export CONFIG_PATH
+cd "$REPO_ROOT"
+
+: "${COHORT:?must set COHORT=cohortI or cohortII}"
+RESULTS="$(cfg_get paths.results_dir)/${COHORT}"
+C_TABLE="${RESULTS}/C_regression_matrix.tsv"
+[[ -s "$C_TABLE" ]] || die "C_regression_matrix missing: $C_TABLE  (step 04 must finish first)"
+
+python3 "$REPO_ROOT/python/run_stats.py" --config "$CONFIG_PATH" --cohort "$COHORT"
+
+log "05_run_stats: cohort=$COHORT DONE -> $RESULTS/stats_syndrome_associations.tsv"
