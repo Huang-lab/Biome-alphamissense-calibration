@@ -1,6 +1,6 @@
 # BioMe AlphaMissense Calibration Pipeline
 
-Code-only LSF pipeline (manual `bsub`) for applying gene-specific calibrated AlphaMissense thresholds (Chen/Pejaver 2026: https://pmc.ncbi.nlm.nih.gov/articles/PMC13174790/#S2) to 28 cancer-predisposition genes in BioMe Cohort I (Regeneron) and Cohort II (Sema4), comparing against an existing ACMG P/LP set, and producing regression-ready tables.
+Code-only LSF pipeline (manual `bsub`) for applying gene-specific calibrated AlphaMissense thresholds (Chen/Pejaver 2026: (https://pmc.ncbi.nlm.nih.gov/articles/PMC13174790/#S2) ) to 28 cancer-predisposition genes in BioMe Cohort I (Regeneron) and Cohort II (Sema4), comparing against an existing ACMG P/LP set, and producing regression-ready tables.
 
 ## Cohort input files (Minerva paths)
 
