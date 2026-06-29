@@ -282,6 +282,19 @@ def main(argv: Optional[List[str]] = None) -> int:
         "min_detectable_OR_80pct_power", "is_canonical", "covariates",
     ]]
     df_out.to_csv(out_path, sep="\t", index=False, na_rep="NaN")
+
+    # Significant-only siblings, sorted by q_BH ascending. Two thresholds so
+    # the user doesn't have to re-run with a different flag for each.
+    for q_thresh in (0.10, 0.05):
+        sig = df_out[df_out["q_BH"].notna() & (df_out["q_BH"] < q_thresh)].copy()
+        sig = sig.sort_values(["q_BH", "p_value"], ascending=[True, True])
+        sig_path = os.path.join(
+            out_dir, f"stats_syndrome_associations.significant_q{q_thresh:.2f}.tsv"
+        )
+        sig.to_csv(sig_path, sep="\t", index=False, na_rep="NaN")
+        LOG.info("run_stats: %d rows with q_BH < %.2f -> %s",
+                 len(sig), q_thresh, sig_path)
+
     n_fit = int(df_out["OR"].notna().sum())
     n_can = int(df_out["is_canonical"].sum())
     LOG.info("run_stats: wrote %d rows to %s  (n_fit_ok=%d, canonical cells=%d)",
