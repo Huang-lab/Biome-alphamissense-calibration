@@ -153,9 +153,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--cohort", required=True)
     ap.add_argument("--out-dir", default=None,
                     help="default: results/<cohort>/ from config")
-    ap.add_argument("--min-cell-size", type=int, default=5,
-                    help="skip cells where any of the 2x2 counts is below this; "
-                         "row is still emitted with NaN stats")
+    ap.add_argument("--min-cell-size", type=int, default=3,
+                    help="suppress logistic regression where the smaller of "
+                         "{carrier-cases, carrier-controls} is below this. "
+                         "Counts (a,b,c,d) are still emitted; OR/CI/p set to NaN. "
+                         "Default 3 keeps weakly-powered cells visible but "
+                         "drops single-carrier flukes.")
     args = ap.parse_args(argv)
 
     import numpy as np
@@ -211,7 +214,12 @@ def main(argv: Optional[List[str]] = None) -> int:
                 c = int(((sub_cc["_carrier"] == 0) & (sub_cc["_is_case"] == 1)).sum())
                 d = int(((sub_cc["_carrier"] == 0) & (sub_cc["_is_case"] == 0)).sum())
                 n_total = a + b + c + d
-                min_obs = min(a, b, c, d)
+                # Suppression rule: require at least N carrier-cases AND
+                # N carrier-controls. Non-carrier counts (c, d) are virtually
+                # always huge in a 28k-sample cohort so they never gate the fit.
+                # min(a, b) is what actually controls regression stability and
+                # is the publication-safe small-cell metric.
+                min_obs = min(a, b)
 
                 row: List = [
                     args.cohort, syndrome, ",".join(groups[syndrome]),
