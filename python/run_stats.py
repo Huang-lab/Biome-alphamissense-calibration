@@ -214,7 +214,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                 min_obs = min(a, b, c, d)
 
                 row: List = [
-                    args.cohort, syndrome, phenotype, label,
+                    args.cohort, syndrome, ",".join(groups[syndrome]),
+                    phenotype, label,
                     n_total, a + b, a, c, b, d,
                     _is_canonical(syndrome, phenotype),
                 ]
@@ -244,7 +245,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     # BH q across (cohort, variant_category) groups --------------------------
     df_out = pd.DataFrame(rows_out, columns=[
-        "cohort", "syndrome", "phenotype", "variant_category",
+        "cohort", "syndrome", "genes", "phenotype", "variant_category",
         "n_total", "n_carriers", "n_cases_carriers", "n_cases_noncarriers",
         "n_ctrl_carriers", "n_ctrl_noncarriers", "is_canonical",
         "OR", "OR_95CI_lo", "OR_95CI_hi", "p_value",
@@ -265,7 +266,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     os.makedirs(out_dir, exist_ok=True)
     out_path = os.path.join(out_dir, "stats_syndrome_associations.tsv")
     df_out = df_out[[
-        "cohort", "syndrome", "phenotype", "variant_category",
+        "cohort", "syndrome", "genes", "phenotype", "variant_category",
         "n_total", "n_carriers",
         "n_cases_carriers", "n_cases_noncarriers",
         "n_ctrl_carriers", "n_ctrl_noncarriers",
