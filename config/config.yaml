@@ -178,4 +178,6 @@ lsf:
   step_02_gather:          { n: 2,  W: "02:00", mem: "8000"  }
   step_03_call_carriers:   { n: 4,  W: "04:00", mem: "16000" }
   step_04_compare_tab:     { n: 4,  W: "04:00", mem: "16000" }
+  step_05_run_stats:       { n: 4,  W: "02:00", mem: "16000" }
+  step_06_make_figures:    { n: 2,  W: "01:00", mem: "8000"  }
   step_index_cohortII:     { n: 2,  W: "04:00", mem: "8000"  }
