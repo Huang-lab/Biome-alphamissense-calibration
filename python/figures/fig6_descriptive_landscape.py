@@ -43,9 +43,9 @@ from util import LOG  # noqa: E402
 from . import common
 
 
-CATS = [("AMprimary", "AM_primary"),
+CATS = [("AMprimary", "AM_calibrated"),
         ("ACMG",      "ACMG_PLP"),
-        ("AMonly",    "AM_only_non_PLP")]
+        ("AMonly",    "AM_calibrated_not_PLP")]
 
 
 def _any_carrier_per_sample(df, suffix: str) -> "pd.Series":
@@ -79,7 +79,7 @@ def panel_6A(ax, df) -> None:
         ax.set_title("A  Carrier freq per phenotype  (sorted by AM-primary)")
         return
     pf = pd.DataFrame(rows)
-    ampr = pf[pf["category"] == "AM_primary"].set_index("phenotype")["freq"]
+    ampr = pf[pf["category"] == "AM_calibrated"].set_index("phenotype")["freq"]
     order = ampr.sort_values(ascending=False).index.tolist()
     x = np.arange(len(order))
     w = 0.27

@@ -78,7 +78,7 @@ def panel_4A(ax, df) -> None:
     im = ax.imshow(mat.values, cmap="viridis", aspect="auto")
     ax.set_xticks(range(len(mat.columns)))
     ax.set_xticklabels([common.CATEGORY_LABELS.get(
-        {"ACMG":"ACMG_PLP","AMprimary":"AM_primary","AMonly":"AM_only_non_PLP"}[c], c)
+        {"ACMG":"ACMG_PLP","AMprimary":"AM_calibrated","AMonly":"AM_calibrated_not_PLP"}[c], c)
         for c in mat.columns], rotation=45, ha="right", fontsize=6)
     ax.set_yticks(range(len(mat.index)))
     ax.set_yticklabels(mat.index, fontsize=6)
@@ -117,7 +117,7 @@ def panel_4C(ax, df) -> None:
     carr = pf[ pf["_am_only_any"]]
     ax.scatter(ctrl["PC1"], ctrl["PC2"], s=2, alpha=0.4, color="#bbbbbb", label="non-carrier")
     ax.scatter(carr["PC1"], carr["PC2"], s=8, alpha=0.9,
-               color=common.CATEGORY_COLORS["AM_only_non_PLP"], label="AM-only carrier")
+               color=common.CATEGORY_COLORS["AM_calibrated_not_PLP"], label="AM-only carrier")
     ax.set_xlabel("PC1")
     ax.set_ylabel("PC2")
     ax.legend(fontsize=6, loc="best")

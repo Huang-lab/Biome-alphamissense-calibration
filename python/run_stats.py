@@ -63,14 +63,19 @@ CANONICAL_SYNDROME_CANCERS: Dict[str, List[str]] = {
 }
 
 # Variant-category column suffix (in C_regression_matrix.tsv) -> human label.
+# Suffixes are the historical names compare_tabulate.py wrote (`_AMprimary`,
+# `_AMonly`, `_AM0864`, `_ACMG`); the labels are the figure-/stats-layer
+# rename. Upstream files are NOT re-emitted — we just relabel here so the
+# output TSV and downstream figures use the human names.
 VARIANT_CATEGORIES: List[Tuple[str, str]] = [
     ("ACMG",       "ACMG_PLP"),
-    ("AMprimary",  "AM_primary"),
-    ("AMonly",     "AM_only_non_PLP"),
+    ("AMprimary",  "AM_calibrated"),
+    ("AMonly",     "AM_calibrated_not_PLP"),
     # AM ≥ 0.864 (the old global threshold). Kept so Table 4 / Fig 3 can show,
-    # cell-by-cell, that the new gene-specific method's ORs track ACMG's
-    # pattern more closely than the legacy global threshold did.
-    ("AM0864",     "AM_global_0864"),
+    # cell-by-cell, that the new per-variant Chen lookup's ORs track ACMG's
+    # pattern more closely than the legacy global threshold did. Threshold
+    # value is in the label so reviewers don't have to look it up.
+    ("AM0864",     "AM_global_0.864"),
 ]
 
 CONTROL_GROUP_TOKENS: List[str] = ["control"]  # lowercase substring match

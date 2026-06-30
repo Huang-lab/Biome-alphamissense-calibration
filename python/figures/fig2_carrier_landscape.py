@@ -63,9 +63,9 @@ def panel_2A(ax, df) -> None:
     ax.bar(x - w, [acmg.get(s, 0) for s in syndromes], width=w,
            color=common.CATEGORY_COLORS["ACMG_PLP"], label=common.CATEGORY_LABELS["ACMG_PLP"])
     ax.bar(x,     [amp.get(s, 0)  for s in syndromes], width=w,
-           color=common.CATEGORY_COLORS["AM_primary"], label=common.CATEGORY_LABELS["AM_primary"])
+           color=common.CATEGORY_COLORS["AM_calibrated"], label=common.CATEGORY_LABELS["AM_calibrated"])
     ax.bar(x + w, [amo.get(s, 0)  for s in syndromes], width=w,
-           color=common.CATEGORY_COLORS["AM_only_non_PLP"], label=common.CATEGORY_LABELS["AM_only_non_PLP"])
+           color=common.CATEGORY_COLORS["AM_calibrated_not_PLP"], label=common.CATEGORY_LABELS["AM_calibrated_not_PLP"])
     ax.set_xticks(x)
     ax.set_xticklabels([common.SYNDROME_SHORT_LABEL.get(s, s) for s in syndromes],
                        rotation=45, ha="right", fontsize=6)
@@ -92,7 +92,7 @@ def panel_2B(ax, df) -> None:
         if total == 0:
             continue
         rows.append({"syndrome": syn, "ACMG_only": only_acmg / total,
-                     "AM_only_non_PLP": only_am / total, "both": both / total})
+                     "AM_calibrated_not_PLP": only_am / total, "both": both / total})
     if not rows:
         ax.text(0.5, 0.5, "no carriers in cohort", ha="center", va="center",
                 transform=ax.transAxes, fontsize=8, color="grey")
@@ -105,7 +105,7 @@ def panel_2B(ax, df) -> None:
     bottoms = np.zeros(len(pf))
     for key, color_key in [("ACMG_only", "ACMG_PLP"),
                            ("both",      "both"),
-                           ("AM_only_non_PLP", "AM_only_non_PLP")]:
+                           ("AM_calibrated_not_PLP", "AM_calibrated_not_PLP")]:
         ax.bar(range(len(pf)), pf[key], bottom=bottoms, width=0.7,
                color=common.CATEGORY_COLORS[color_key], label=key.replace("_", " "))
         bottoms = bottoms + pf[key].fillna(0).to_numpy()
@@ -134,11 +134,11 @@ def panel_2C(ax, df) -> None:
     x = np.arange(len(syndromes))
     w = 0.4
     ax.bar(x - w/2, [am0864.get(s, 0) for s in syndromes], width=w,
-           color=common.CATEGORY_COLORS["AM_global_0864"],
-           label=common.CATEGORY_LABELS["AM_global_0864"])
+           color=common.CATEGORY_COLORS["AM_global_0.864"],
+           label=common.CATEGORY_LABELS["AM_global_0.864"])
     ax.bar(x + w/2, [amp.get(s, 0)    for s in syndromes], width=w,
-           color=common.CATEGORY_COLORS["AM_primary"],
-           label=common.CATEGORY_LABELS["AM_primary"])
+           color=common.CATEGORY_COLORS["AM_calibrated"],
+           label=common.CATEGORY_LABELS["AM_calibrated"])
     ax.set_xticks(x)
     ax.set_xticklabels([common.SYNDROME_SHORT_LABEL.get(s, s) for s in syndromes],
                        rotation=45, ha="right", fontsize=6)

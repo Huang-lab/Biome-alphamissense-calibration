@@ -178,9 +178,9 @@ def panel_1B(ax, chen_subset: str, global_threshold: float = 0.864) -> None:
     x = np.arange(len(order))
     h_global = [fpr_global.get(g, np.nan) for g in order]
     h_gene   = [fpr_gene.get(g, np.nan)   for g in order]
-    ax.bar(x - 0.2, h_global, width=0.4, color=common.CATEGORY_COLORS["AM_global_0864"],
+    ax.bar(x - 0.2, h_global, width=0.4, color=common.CATEGORY_COLORS["AM_global_0.864"],
            label="global 0.864")
-    ax.bar(x + 0.2, h_gene,   width=0.4, color=common.CATEGORY_COLORS["AM_primary"],
+    ax.bar(x + 0.2, h_gene,   width=0.4, color=common.CATEGORY_COLORS["AM_calibrated"],
            label="gene-specific (Chen)")
     ax.axhline(0.007, color="grey", lw=0.5, ls="--")
     ax.text(len(order) - 0.5, 0.012, "advertised 0.007",
@@ -218,8 +218,8 @@ def panel_1D(ax, chen_summary_path: str, chen_subset_path: str) -> None:
     df = df.set_index("gene").reindex(common.GENE_ORDER).reset_index()
     df["approach"] = df["calibration_approach_majority"].fillna("none")
     color_for = {
-        "single_gene":      common.CATEGORY_COLORS["AM_primary"],
-        "domain_aggregate": common.CATEGORY_COLORS["AM_only_non_PLP"],
+        "single_gene":      common.CATEGORY_COLORS["AM_calibrated"],
+        "domain_aggregate": common.CATEGORY_COLORS["AM_calibrated_not_PLP"],
         "none":             "#bbbbbb",
     }
     colors = [color_for.get(a, "#bbbbbb") for a in df["approach"]]

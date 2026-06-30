@@ -79,9 +79,13 @@ for cohort in cohortI cohortII; do
         --c-table "$C_TABLE" --out-dir "$OUT" --cohort-name "$cohort"
 
     if [[ -f "$STATS" ]]; then
-        log "fig3 — case/control associations (${cohort})"
+        log "fig3 — significant case/control associations per phenotype (${cohort})"
+        SIG="${CRES}/stats_syndrome_associations.significant_q0.10.tsv"
         python3 -m python.figures.fig3_case_control_associations \
-            --stats "$STATS" --out-dir "$OUT" --cohort-name "$cohort"
+            --stats "$STATS" \
+            ${SIG:+--significant "$SIG"} \
+            --q-threshold 0.10 \
+            --out-dir "$OUT" --cohort-name "$cohort"
     else
         log "WARN: ${cohort}'s stats_syndrome_associations.tsv missing — skipping fig3 for ${cohort}"
     fi

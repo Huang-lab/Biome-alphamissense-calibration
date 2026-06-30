@@ -21,22 +21,24 @@ from typing import Dict, List, Tuple
 FIG_WIDTH_DOUBLE: Tuple[float, float] = (7.2, 4.0)
 FIG_WIDTH_SINGLE: Tuple[float, float] = (3.5, 3.0)
 
-# Qualitative palette for the three carrier definitions + their "both" overlap.
-# Chosen for colorblind-friendliness (Wong 2011).
+# Qualitative palette for the four carrier definitions + their "both" overlap.
+# Chosen for colorblind-friendliness (Wong 2011). Keys match the
+# `variant_category` column values written by run_stats.py.
 CATEGORY_COLORS: Dict[str, str] = {
-    "ACMG_PLP":         "#0072B2",  # blue
-    "AM_primary":       "#E69F00",  # amber
-    "AM_only_non_PLP":  "#009E73",  # green
-    "both":             "#56B4E9",  # sky blue (Fig 2B stacked share)
-    "AM_global_0864":   "#CC79A7",  # rose (counterfactual; Fig 1C / 2C)
+    "ACMG_PLP":              "#0072B2",  # blue
+    "AM_calibrated":         "#E69F00",  # amber — Chen per-variant lookup, evidence ≥ PP3_Moderate
+    "AM_calibrated_not_PLP": "#009E73",  # green — AM_calibrated AND NOT ACMG_PLP (novel set)
+    "both":                  "#56B4E9",  # sky blue (Fig 2B stacked share)
+    "AM_global_0.864":       "#CC79A7",  # rose — legacy single-cutoff counterfactual
 }
 
-# Display label for the three categories — used in legends and axes.
+# Display labels — used in legends and axes. The 0.864 is in the label
+# itself so reviewers don't have to look up which threshold "global" means.
 CATEGORY_LABELS: Dict[str, str] = {
-    "ACMG_PLP":         "ACMG/AMP P/LP",
-    "AM_primary":       "AM-primary (Chen)",
-    "AM_only_non_PLP":  "AM-only, non-P/LP",
-    "AM_global_0864":   "AM ≥ 0.864 (legacy)",
+    "ACMG_PLP":              "ACMG/AMP P/LP",
+    "AM_calibrated":         "AM-calibrated (Chen PP3≥Moderate)",
+    "AM_calibrated_not_PLP": "AM-calibrated, not P/LP",
+    "AM_global_0.864":       "AM ≥ 0.864 (legacy)",
 }
 
 # Canonical syndrome display order — top-to-bottom for the OR heatmap (Fig 3A).

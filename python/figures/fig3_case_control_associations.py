@@ -1,40 +1,36 @@
-"""Figure 3 — Case-control test: expected associations replicate before novel.
+"""Figure 3 — per-phenotype forest plots of significant case/control associations.
 
-This is the highest-stakes figure of the rebuttal set (Action 4 is flagged
-"highest-risk; run first" in the rebuttal letter). All panels read
-``results/<cohort>/stats_syndrome_associations.tsv`` produced by
-``python/run_stats.py``.
+Reads ``results/<cohort>/stats_syndrome_associations.significant_q0.10.tsv``
+(the significant-only sibling produced by ``python/run_stats.py``) and writes
+ONE file per cancer phenotype that has at least one significant row:
 
-  3A  OR heatmap, 15 syndromes x N cancer phenotypes. FOUR sub-panels
-      {ACMG/AMP P/LP, AM-primary, AM-only-non-P/LP, AM ≥ 0.864 (legacy
-      global threshold)}. The 4th sub-panel is the side-by-side evidence
-      that the new gene-specific method's ORs track ACMG's pattern more
-      closely than the old single-threshold definition did. Canonical
-      cells (``is_canonical=True``) outlined in black. Color = log(OR),
-      grey for cells with n_carriers < 5 (NaN OR).
+    fig_logreg_forest_phenotype_<phenotype>.{png,pdf}
 
-  3B  Post-hoc power for the AM-only-non-P/LP cells: observed OR vs the
-      minimum detectable OR at 80% power. Tells R1 whether a missing
-      association is power-limited or a true null.
+Each plotted row is one (syndrome, variant_category) pair with q_BH below the
+threshold (default 0.10, configurable via ``--q-threshold``), showing OR with
+95% CI on a log axis. Canonical syndrome × phenotype pairs are marked with an
+asterisk in the y-label. Bars colored by variant_category using the shared
+palette from ``common.CATEGORY_COLORS``. Phenotypes with zero significant
+rows are skipped silently (logged at INFO).
 
-  3C  Forest plot for MUTYH-Polyposis + MEN + Lynch vs Colorectal/
-      Thyroid/Endometrial (the three Action 11 cells most likely to
-      reach significance in BioMe).
-
-  3D  Top non-canonical hits: filter to is_canonical=False & q_BH<0.1,
-      rank by |log OR|, show top 5-10 as a side forest plot. Framed as
-      hypothesis-generating.
+If the explicit ``--significant-stats`` path is missing or empty, the script
+falls back to reading the full ``--stats`` TSV and applying the q threshold
+in-memory — that way callers don't need both files on disk.
 
 Usage:
     python -m python.figures.fig3_case_control_associations \\
-        --stats results/cohortI/stats_syndrome_associations.tsv \\
-        --out-dir results/figures
+        --stats           results/cohortI/stats_syndrome_associations.tsv \\
+        --significant     results/cohortI/stats_syndrome_associations.significant_q0.10.tsv \\
+        --q-threshold     0.10 \\
+        --out-dir         results/figures \\
+        --cohort-name     cohortI
 """
 from __future__ import annotations
 
 import argparse
 import math
 import os
+import re
 import sys
 from pathlib import Path
 from typing import List, Optional
@@ -45,227 +41,173 @@ from util import LOG  # noqa: E402
 
 from . import common
 
-VARIANT_CATEGORY_ORDER = ["ACMG_PLP", "AM_primary", "AM_only_non_PLP", "AM_global_0864"]
+VARIANT_CATEGORY_ORDER = [
+    "ACMG_PLP",
+    "AM_calibrated",
+    "AM_calibrated_not_PLP",
+    "AM_global_0.864",
+]
 
 
-def _placeholder_panel(ax, msg: str) -> None:
-    ax.set_facecolor("#f5f5f5")
-    ax.text(0.5, 0.5, msg, ha="center", va="center", fontsize=8,
-            transform=ax.transAxes, color="#333333", wrap=True)
-    ax.set_xticks([]); ax.set_yticks([])
+def _safe_phenotype_slug(phenotype: str) -> str:
+    """Lowercase, alnum-or-underscore for filenames. Keeps the original
+    phenotype string usable as a figure title; the slug is filesystem-safe."""
+    s = re.sub(r"[^A-Za-z0-9]+", "_", phenotype).strip("_").lower()
+    return s or "unknown"
 
 
-def panel_3A(axes, df: "pd.DataFrame") -> None:
-    """Three-panel heatmap: rows = 15 syndromes, cols = cancer phenotypes,
-    cells outlined where is_canonical."""
-    import numpy as np
+def _load_significant(*, significant_path: Optional[str],
+                      stats_path: Optional[str],
+                      q_threshold: float) -> "pd.DataFrame":
+    """Return the significant-row subset as a DataFrame. Prefers the
+    pre-filtered TSV; falls back to filtering the full stats TSV at
+    ``q_threshold`` if the sibling isn't on disk yet."""
     import pandas as pd
-    from matplotlib.patches import Rectangle
-
-    phenotypes = sorted(df["phenotype"].unique().tolist())
-    syndromes = [s for s in common.SYNDROME_ORDER if s in df["syndrome"].unique()]
-    if not phenotypes or not syndromes:
-        for ax in axes:
-            _placeholder_panel(ax, "no rows in stats table")
-        return
-
-    # symmetric log color scale; OR=1 -> 0
-    log_ors = df["OR"].apply(lambda x: math.log(x) if (x and x > 0) else float("nan"))
-    vmax = max(abs(log_ors.min(skipna=True) or 0), abs(log_ors.max(skipna=True) or 0), 1.0)
-
-    for ax, cat in zip(axes, VARIANT_CATEGORY_ORDER):
-        sub = df[df["variant_category"] == cat]
-        if sub.empty:
-            _placeholder_panel(ax, f"{cat}\n(no rows)")
-            continue
-        mat = sub.pivot(index="syndrome", columns="phenotype", values="OR")
-        mat = mat.reindex(index=syndromes, columns=phenotypes)
-        canonical = sub.pivot(index="syndrome", columns="phenotype",
-                              values="is_canonical").reindex(
-            index=syndromes, columns=phenotypes,
-        ).fillna(False).astype(bool)
-
-        # log-OR for color. .map replaces deprecated .applymap in pandas 3.0+.
-        log_mat = mat.map(lambda x: math.log(x) if (pd.notna(x) and x > 0) else float("nan"))
-        im = ax.imshow(log_mat.values, cmap="RdBu_r", vmin=-vmax, vmax=vmax,
-                       aspect="auto")
-        ax.set_xticks(np.arange(len(phenotypes)))
-        ax.set_xticklabels(phenotypes, rotation=45, ha="right", fontsize=6)
-        ax.set_yticks(np.arange(len(syndromes)))
-        ax.set_yticklabels([common.SYNDROME_SHORT_LABEL.get(s, s) for s in syndromes],
-                           fontsize=6)
-        ax.set_title(common.CATEGORY_LABELS[cat], fontsize=8)
-        # Annotate canonical cells with a thicker outline
-        for i, syn in enumerate(syndromes):
-            for j, phen in enumerate(phenotypes):
-                if canonical.iat[i, j]:
-                    ax.add_patch(Rectangle((j - 0.5, i - 0.5), 1, 1,
-                                           edgecolor="black", facecolor="none", lw=1.0))
-                # grey out NaN
-                if pd.isna(log_mat.iat[i, j]):
-                    ax.add_patch(Rectangle((j - 0.5, i - 0.5), 1, 1,
-                                           edgecolor="none", facecolor="#e0e0e0", alpha=0.7))
-        # Only first panel keeps y labels for compactness
-        if cat != VARIANT_CATEGORY_ORDER[0]:
-            ax.set_yticks([])
-    # Shared colorbar on the rightmost panel
-    cb = axes[-1].figure.colorbar(im, ax=axes[-1], shrink=0.7, pad=0.02)
-    cb.set_label("log(OR)", fontsize=7)
-
-
-def panel_3B(ax, df: "pd.DataFrame") -> None:
-    """Observed OR vs min-detectable-OR for AM-only-non-P/LP canonical
-    cells. y-axis: observed OR (with NaN as 'not testable'). x-axis: min
-    detectable OR. Identity line = 'just-detectable'."""
-    import numpy as np
-    sub = df[(df["variant_category"] == "AM_only_non_PLP") & df["is_canonical"]]
-    if sub.empty:
-        _placeholder_panel(ax, "no canonical AM-only cells")
-        return
-    mdo = sub["min_detectable_OR_80pct_power"].astype(float)
-    obs = sub["OR"].astype(float)
-    mask = mdo.notna() & obs.notna()
-    if not mask.any():
-        _placeholder_panel(ax, "no canonical cells with sufficient cells\nto compute MDO + observed OR")
-        return
-    ax.scatter(mdo[mask], obs[mask], s=14,
-               color=common.CATEGORY_COLORS["AM_only_non_PLP"], alpha=0.7,
-               edgecolor="black", linewidth=0.3)
-    lo, hi = 0.5, max(2.0, float(np.nanmax(np.concatenate([mdo.dropna(), obs.dropna()]))) + 0.5)
-    ax.plot([lo, hi], [lo, hi], "k--", lw=0.5)
-    ax.axhline(1.0, color="grey", lw=0.4, ls=":")
-    ax.set_xlabel("min detectable OR (80% power, α=0.05)")
-    ax.set_ylabel("observed OR")
-    ax.set_xlim(lo, hi)
-    ax.set_ylim(lo, hi)
-    ax.set_xscale("log"); ax.set_yscale("log")
-    ax.set_title("B  AM-only power vs effect (canonical cells)")
-
-
-def panel_3C(ax, df: "pd.DataFrame") -> None:
-    """Forest plot for the three Action-11 syndromes against their canonical
-    cancers, three series per row (ACMG / AM-primary / AM-only)."""
-    target = [
-        ("MUTYH_Associated_Polyposis", "colorectal"),
-        ("Multiple_Endocrine_Neoplasia", "thyroid"),
-        ("Lynch_Syndrome",               "colorectal"),
-    ]
-    rows = []
-    for syndrome, phen_token in target:
-        sub_syn = df[df["syndrome"] == syndrome]
-        if sub_syn.empty:
-            continue
-        # any phenotype whose name (case-insensitive) contains the token
-        sub = sub_syn[sub_syn["phenotype"].str.lower().str.contains(phen_token, na=False)]
-        if sub.empty:
-            continue
-        for cat in VARIANT_CATEGORY_ORDER:
-            r = sub[sub["variant_category"] == cat]
-            if r.empty:
-                continue
-            rec = r.iloc[0]
-            rows.append({
-                "label": f"{common.SYNDROME_SHORT_LABEL.get(syndrome, syndrome)} -> {phen_token}",
-                "cat":   cat,
-                "OR":    rec["OR"],
-                "lo":    rec["OR_95CI_lo"],
-                "hi":    rec["OR_95CI_hi"],
-            })
-    if not rows:
-        _placeholder_panel(ax, "no rows for MUTYH-AP / MEN / Lynch panels")
-        return
-    import pandas as pd
-    pf = pd.DataFrame(rows)
-    yspace = list(range(len(pf)))[::-1]
-    for y, (_, r) in zip(yspace, pf.iterrows()):
-        if pd.isna(r["OR"]):
-            ax.text(1.0, y, "  n<5", va="center", fontsize=6, color="grey")
-            continue
-        ax.errorbar(r["OR"], y,
-                    xerr=[[r["OR"] - r["lo"]], [r["hi"] - r["OR"]]],
-                    fmt="o", markersize=3,
-                    color=common.CATEGORY_COLORS[r["cat"]],
-                    ecolor=common.CATEGORY_COLORS[r["cat"]], lw=0.8)
-    ax.axvline(1.0, color="grey", ls="--", lw=0.5)
-    ax.set_yticks(yspace)
-    ax.set_yticklabels(pf["label"], fontsize=6)
-    ax.set_xscale("log")
-    ax.set_xlabel("OR (95% CI)")
-    ax.set_title("C  MUTYH-AP / MEN / Lynch enrichment (Action 11)")
-
-
-def panel_3D(ax, df: "pd.DataFrame", top_n: int = 8, q_cutoff: float = 0.1) -> None:
-    """Top non-canonical hits with q_BH below the cutoff."""
-    import pandas as pd
-    sub = df[~df["is_canonical"] & df["q_BH"].notna() & (df["q_BH"] < q_cutoff)]
-    if sub.empty:
-        _placeholder_panel(
-            ax,
-            f"no non-canonical cells with q_BH < {q_cutoff}\n"
-            f"(novel-association story not supported by data — Action 5\n"
-            f"would need to soften from claim to hypothesis-generating)",
+    if significant_path and os.path.isfile(significant_path):
+        df = pd.read_csv(significant_path, sep="\t")
+        LOG.info("fig3: loaded %d significant rows from %s", len(df), significant_path)
+        return df
+    if not stats_path or not os.path.isfile(stats_path):
+        raise FileNotFoundError(
+            f"Neither significant-stats path ({significant_path!r}) nor "
+            f"full stats path ({stats_path!r}) exists."
         )
-        ax.set_title("D  Novel hits  (q < {:.2f})".format(q_cutoff))
-        return
-    sub = sub.assign(abs_logor=sub["OR"].apply(
-        lambda x: abs(math.log(x)) if (pd.notna(x) and x > 0) else 0
-    )).sort_values("abs_logor", ascending=False).head(top_n)
-    yspace = list(range(len(sub)))[::-1]
-    for y, (_, r) in zip(yspace, sub.iterrows()):
-        ax.errorbar(r["OR"], y,
-                    xerr=[[r["OR"] - r["OR_95CI_lo"]], [r["OR_95CI_hi"] - r["OR"]]],
-                    fmt="o", markersize=3,
-                    color=common.CATEGORY_COLORS[r["variant_category"]],
-                    ecolor=common.CATEGORY_COLORS[r["variant_category"]], lw=0.8)
-    ax.axvline(1.0, color="grey", ls="--", lw=0.5)
-    ax.set_yticks(yspace)
-    ax.set_yticklabels(
-        [f"{common.SYNDROME_SHORT_LABEL.get(s, s)} -> {p}  ({c})"
-         for s, p, c in zip(sub["syndrome"], sub["phenotype"], sub["variant_category"])],
-        fontsize=6,
-    )
-    ax.set_xscale("log")
-    ax.set_xlabel("OR (95% CI)")
-    ax.set_title(f"D  Novel hits  (q_BH < {q_cutoff})")
+    full = pd.read_csv(stats_path, sep="\t")
+    sig = full[full["q_BH"].notna() & (full["q_BH"] < q_threshold)].copy()
+    sig = sig.sort_values(["q_BH", "p_value"], ascending=[True, True])
+    LOG.info("fig3: filtered %d/%d rows from %s with q_BH < %.3f",
+             len(sig), len(full), stats_path, q_threshold)
+    return sig
 
 
-def make(out_dir: str, *, stats: str, cohort_name: Optional[str] = None) -> None:
+def _plot_forest_for_phenotype(df_p: "pd.DataFrame", phenotype: str,
+                               *, q_threshold: float, cohort_name: Optional[str]):
+    """Render one forest plot. Caller already filtered to a single phenotype.
+    Returns the matplotlib figure (caller saves and closes it)."""
     import matplotlib.pyplot as plt
     import pandas as pd
-
     common.apply_rcparams()
-    df = pd.read_csv(stats, sep="\t")
-    # Layout: 4-col top row for panel 3A (one per variant category), 4-col
-    # bottom rows split for 3B/3C/3D — the extra column widens 3A enough to
-    # fit the new AM_global_0864 sub-panel without squeezing the labels.
-    fig = plt.figure(figsize=(common.FIG_WIDTH_DOUBLE[0] * 1.15,
-                              common.FIG_WIDTH_DOUBLE[0] * 1.1))
-    gs = fig.add_gridspec(3, 4, height_ratios=[1.6, 1.0, 1.0],
-                          hspace=0.6, wspace=0.5)
-    axesA = [fig.add_subplot(gs[0, j]) for j in range(4)]
-    axB   = fig.add_subplot(gs[1, 0])
-    axC   = fig.add_subplot(gs[1, 1:])
-    axD   = fig.add_subplot(gs[2, :])
-    panel_3A(axesA, df)
-    panel_3B(axB,   df)
-    panel_3C(axC,   df)
-    panel_3D(axD,   df)
-    basename = f"fig3.{cohort_name}" if cohort_name else "fig3"
-    common.save_both(fig, Path(out_dir), basename)
-    plt.close(fig)
-    LOG.info("fig3: wrote %s.png + %s.pdf to %s", basename, basename, out_dir)
+
+    # Stable sort: significant rows already sorted by q_BH ascending in the
+    # input; rank by OR descending for a visually intuitive forest plot.
+    df_p = df_p.assign(
+        _OR_for_sort=df_p["OR"].astype(float).fillna(0.0)
+    ).sort_values("_OR_for_sort", ascending=True)  # ascending → largest at top
+
+    n_rows = len(df_p)
+    height = max(1.4, 0.28 * n_rows + 0.8)
+    fig, ax = plt.subplots(figsize=(common.FIG_WIDTH_DOUBLE[0], height))
+
+    y = list(range(n_rows))
+    for yi, (_, r) in zip(y, df_p.iterrows()):
+        cat = r["variant_category"]
+        color = common.CATEGORY_COLORS.get(cat, "#444444")
+        or_val = float(r["OR"]) if pd.notna(r["OR"]) else float("nan")
+        lo = float(r["OR_95CI_lo"]) if pd.notna(r["OR_95CI_lo"]) else float("nan")
+        hi = float(r["OR_95CI_hi"]) if pd.notna(r["OR_95CI_hi"]) else float("nan")
+        if math.isnan(or_val):
+            ax.text(1.0, yi, "  OR n/a", va="center", fontsize=6, color="grey")
+            continue
+        xerr_lo = max(or_val - lo, 0.0) if not math.isnan(lo) else 0.0
+        xerr_hi = max(hi - or_val, 0.0) if not math.isnan(hi) else 0.0
+        ax.errorbar(or_val, yi, xerr=[[xerr_lo], [xerr_hi]],
+                    fmt="o", markersize=4,
+                    color=color, ecolor=color, lw=1.0,
+                    capsize=2.0)
+
+    ax.axvline(1.0, color="grey", ls="--", lw=0.5)
+    ax.set_yticks(y)
+    ylabels = []
+    for _, r in df_p.iterrows():
+        syn = common.SYNDROME_SHORT_LABEL.get(r["syndrome"], r["syndrome"])
+        cat_lbl = common.CATEGORY_LABELS.get(r["variant_category"], r["variant_category"])
+        mark = "*" if bool(r["is_canonical"]) else " "
+        q = float(r["q_BH"]) if pd.notna(r["q_BH"]) else float("nan")
+        ylabels.append(f"{mark}{syn} · {cat_lbl}  (q={q:.2g})")
+    ax.set_yticklabels(ylabels, fontsize=6)
+    ax.set_xscale("log")
+    ax.set_xlabel("OR (95% CI), log scale")
+    title_bits = [f"phenotype: {phenotype}"]
+    if cohort_name:
+        title_bits.append(f"cohort: {cohort_name}")
+    title_bits.append(f"q_BH < {q_threshold:g}, * = canonical syndrome-cancer pair")
+    ax.set_title("  |  ".join(title_bits), fontsize=8)
+
+    # Color-keyed legend (only the categories that actually appear)
+    from matplotlib.patches import Patch
+    cats_present = [c for c in VARIANT_CATEGORY_ORDER
+                    if c in set(df_p["variant_category"])]
+    handles = [Patch(facecolor=common.CATEGORY_COLORS[c],
+                     label=common.CATEGORY_LABELS.get(c, c))
+               for c in cats_present]
+    if handles:
+        ax.legend(handles=handles, loc="lower right", fontsize=6, frameon=False)
+
+    fig.tight_layout()
+    return fig
+
+
+def make(out_dir: str, *, stats: Optional[str] = None,
+         significant: Optional[str] = None,
+         q_threshold: float = 0.10,
+         cohort_name: Optional[str] = None) -> None:
+    """Write per-phenotype forest plots into ``out_dir``. Skips phenotypes
+    that have no rows below ``q_threshold`` (logs the skip at INFO)."""
+    import matplotlib.pyplot as plt
+
+    sig = _load_significant(
+        significant_path=significant, stats_path=stats, q_threshold=q_threshold,
+    )
+    if sig.empty:
+        LOG.warning("fig3: 0 significant rows total — no per-phenotype files written")
+        return
+
+    out_path = Path(out_dir)
+    out_path.mkdir(parents=True, exist_ok=True)
+
+    n_written = 0
+    n_skipped = 0
+    for phenotype, df_p in sig.groupby("phenotype"):
+        if df_p.empty:
+            n_skipped += 1
+            LOG.info("fig3: skipping %r — 0 significant rows", phenotype)
+            continue
+        fig = _plot_forest_for_phenotype(
+            df_p, phenotype,
+            q_threshold=q_threshold, cohort_name=cohort_name,
+        )
+        slug = _safe_phenotype_slug(phenotype)
+        base = f"fig_logreg_forest_phenotype_{slug}"
+        if cohort_name:
+            base = f"{base}.{cohort_name}"
+        common.save_both(fig, out_path, base)
+        plt.close(fig)
+        n_written += 1
+        LOG.info("fig3: wrote %s.png + .pdf (%d rows)", base, len(df_p))
+
+    LOG.info("fig3: wrote %d per-phenotype figure(s); skipped %d phenotype(s) with 0 significant rows",
+             n_written, n_skipped)
 
 
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--stats", required=True,
-                    help="results/<cohort>/stats_syndrome_associations.tsv")
+    ap.add_argument("--stats", default=None,
+                    help="results/<cohort>/stats_syndrome_associations.tsv "
+                         "(fallback when --significant is missing)")
+    ap.add_argument("--significant", default=None,
+                    help="results/<cohort>/stats_syndrome_associations.significant_q0.10.tsv "
+                         "— preferred input. Falls back to filtering --stats if absent.")
+    ap.add_argument("--q-threshold", type=float, default=0.10,
+                    help="q_BH cutoff used for the fallback filter. Has no effect "
+                         "when --significant is provided AND that file exists.")
     ap.add_argument("--out-dir", required=True)
     ap.add_argument("--cohort-name", default=None,
-                    help="if set, suffix output filenames with .<cohort> "
-                         "(e.g. fig3.cohortI.png) to keep cohorts separate")
+                    help="if set, suffix output filenames with .<cohort>")
     args = ap.parse_args(argv)
-    make(args.out_dir, stats=args.stats, cohort_name=args.cohort_name)
+    if not args.stats and not args.significant:
+        ap.error("at least one of --stats / --significant must be provided")
+    make(args.out_dir, stats=args.stats, significant=args.significant,
+         q_threshold=args.q_threshold, cohort_name=args.cohort_name)
     return 0
 
 
