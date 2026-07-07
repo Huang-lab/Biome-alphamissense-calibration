@@ -8,6 +8,8 @@ refs/AlphaMissense*
 refs/*.tsv.gz
 refs/*.gtf.gz
 refs/*.gtf
+refs/newAM_calibration_table_*.csv
+refs/zenodo/
 logs/*.stdout
 logs/*.stderr
 
