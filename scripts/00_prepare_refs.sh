@@ -92,6 +92,27 @@ if [[ -z "$CLINVAR_LOCAL" ]]; then
     fi
 fi
 
+# --- left-normalize ClinVar against the reference FASTA (for indel matching) --
+# subset_clinvar reads BIOAM_CLINVAR_VCF; if we normalize, repoint it at the
+# normalized file so the target-gene subset (and thus indel coordinates) match
+# the normalized BioMe all-variant QC VCF. Requires bcftools + reference_fasta.
+REF_FASTA="$(cfg_get references.reference_fasta 2>/dev/null || echo '')"
+SRC_CLINVAR="${BIOAM_CLINVAR_VCF:-$CLINVAR_LOCAL}"
+if [[ -n "$REF_FASTA" && -s "$REF_FASTA" && -n "$SRC_CLINVAR" && -s "$SRC_CLINVAR" ]]; then
+    if command -v bcftools >/dev/null 2>&1; then
+        CV_NORM="$REPO_ROOT/refs/clinvar/clinvar.norm.vcf.gz"
+        mkdir -p "$(dirname "$CV_NORM")"
+        log "left-normalizing ClinVar against $REF_FASTA -> $CV_NORM"
+        bcftools norm -f "$REF_FASTA" -m -any -Oz -o "$CV_NORM" "$SRC_CLINVAR" \
+            || die "bcftools norm failed on ClinVar VCF ($SRC_CLINVAR)"
+        export BIOAM_CLINVAR_VCF="$CV_NORM"
+    else
+        warn "bcftools not on PATH; cannot normalize ClinVar — indel matching will be best-effort"
+    fi
+elif [[ -z "$REF_FASTA" ]]; then
+    warn "references.reference_fasta unset; ClinVar indels matched best-effort (SNVs exact). Set it in config.local.yaml for reliable indel matching."
+fi
+
 python3 "$REPO_ROOT/python/prepare_refs.py" --config "$CONFIG_PATH" "$@"
 
 log "00_prepare_refs: done. Review refs/REFERENCE_REPORT.md before submitting 01+."

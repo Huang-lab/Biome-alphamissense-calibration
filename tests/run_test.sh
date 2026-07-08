@@ -162,7 +162,7 @@ clinvar:
   min_review_stars: 2
   sig_include: ["Pathogenic", "Likely_pathogenic", "Pathogenic/Likely_pathogenic"]
   exclude_conflicting: true
-  exclude_ptv: true
+  exclude_ptv: false
 
 lsf:
   project: "acc_test"
@@ -205,6 +205,12 @@ for COHORT in cohortI cohortII; do
         log "==== 02_annotate_am  cohort=$COHORT chr$i ===="
         bash "$REPO_ROOT/scripts/02_annotate_am.lsf"
     done
+    for i in $(seq 1 22); do
+        export TEST_CHR_IDX=$i QC_VARIANT_MODE=all
+        log "==== 01c all-variant QC (ClinVar)  cohort=$COHORT chr$i ===="
+        bash "$REPO_ROOT/scripts/01_qc_missense.lsf"
+    done
+    unset QC_VARIANT_MODE
     for i in $(seq 1 22); do
         export TEST_CHR_IDX=$i
         log "==== 02c_annotate_clinvar  cohort=$COHORT chr$i ===="

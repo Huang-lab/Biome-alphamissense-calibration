@@ -69,10 +69,6 @@ CANONICAL_SYNDROME_CANCERS: Dict[str, List[str]] = {
 # output TSV and downstream figures use the human names.
 VARIANT_CATEGORIES: List[Tuple[str, str]] = [
     ("ACMG",       "ACMG_PLP"),
-    # ClinVar P/LP ≥2★ — second clinical-truth comparator (standalone pass,
-    # joined in compare_tabulate.py like ACMG). AM_calibrated_not_PLP below now
-    # excludes BOTH ACMG and ClinVar P/LP.
-    ("ClinVar",    "ClinVar_PLP"),
     ("AMprimary",  "AM_calibrated"),
     ("AMonly",     "AM_calibrated_not_PLP"),
     # AM ≥ 0.864 (the old global threshold). Kept so Table 4 / Fig 3 can show,

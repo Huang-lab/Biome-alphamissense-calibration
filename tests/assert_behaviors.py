@@ -106,19 +106,24 @@ def main(argv=None):
     assert_case("case 3: am_pathogenicity still present (non-empty)",
                 bool(am), f"am_pathogenicity={am!r}")
 
-    # Case 4: AM_only — S2 at BRCA1
+    # Case 4: AM-only — S2 at BRCA1 (AM primary, not ACMG, not ClinVar)
     r = find_row(b_rows, sample_id="S2", chr="chr1", pos="150", gene="BRCA1")
     assert_case("case 4: B row for S2@chr1:150/BRCA1 present", r is not None)
-    assert_case("case 4: category=AM_only",
-                r is not None and r["category"] == "AM_only",
+    assert_case("case 4: category=AM (AM-only)",
+                r is not None and r["category"] == "AM",
                 f"got category={r and r.get('category')!r}")
+    assert_case("case 4: in_ClinVar_PLP=no",
+                r is not None and r["in_ClinVar_PLP"] == "no")
 
-    # Case 5: both — S1 at BRCA1
+    # Case 5: ACMG+AM — S1 at BRCA1 chr1:150 (conflicting ClinVar excluded -> no)
     r = find_row(b_rows, sample_id="S1", chr="chr1", pos="150", gene="BRCA1")
     assert_case("case 5: B row for S1@chr1:150/BRCA1 present", r is not None)
-    assert_case("case 5: category=both",
-                r is not None and r["category"] == "both",
+    assert_case("case 5: category=ACMG_PLP+AM",
+                r is not None and r["category"] == "ACMG_PLP+AM",
                 f"got category={r and r.get('category')!r}")
+    assert_case("case 5: in_ClinVar_PLP=no (chr1:150 was Conflicting -> dropped)",
+                r is not None and r["in_ClinVar_PLP"] == "no",
+                f"got {r and r.get('in_ClinVar_PLP')!r}")
 
     # Case 6: QC fail — S4 absent from Table A at chr1:150 (low DP=5)
     r = find_row(a_rows, sample_id="S4", chr="chr1", pos="150")
@@ -176,36 +181,48 @@ def main(argv=None):
                 c_brca_row is not None
                 and c_brca_row["carrier_Multiple_Endocrine_Neoplasia_AM0864"].upper() == "FALSE")
 
-    # Case 11: ClinVar P/LP >=2* standalone category + AM_calibrated_not_PLP
-    # redefinition. Fixture mini_clinvar has:
-    #   - MEN1 chr2:550 C>T  Pathogenic, 2* (multiple_submitters_no_conflicts) -> KEPT
-    #   - WT1  chr3:950 G>A  Likely_pathogenic, 1* (single_submitter)          -> DROPPED (<2*)
-    #   - BRCA1 chr1:300 A>G Pathogenic, 3* but MC=nonsense (PTV)               -> DROPPED (exclude_ptv)
-    #   - BRCA1 chr1:150 A>G Conflicting_classifications                        -> DROPPED (exclude_conflicting)
-    # S1 carries MEN1 chr2:550 (AM-primary=TRUE, not ACMG). Before ClinVar it was
-    # carrier_MEN_AMonly=TRUE; the ClinVar hit must flip that to FALSE.
-    assert_case("case 11: Table C has carrier_<group>_ClinVar columns",
-                c_brca_row is not None
-                and "carrier_Multiple_Endocrine_Neoplasia_ClinVar" in c_brca_row)
-    assert_case("case 11: S1 carrier_MEN_ClinVar=TRUE (MEN1 chr2:550 P, 2*)",
-                c_brca_row is not None
-                and c_brca_row["carrier_Multiple_Endocrine_Neoplasia_ClinVar"].upper() == "TRUE",
-                f"got {c_brca_row and c_brca_row.get('carrier_Multiple_Endocrine_Neoplasia_ClinVar')!r}")
-    assert_case("case 11: S1 carrier_MEN_AMprimary=TRUE (unchanged)",
-                c_brca_row is not None
-                and c_brca_row["carrier_Multiple_Endocrine_Neoplasia_AMprimary"].upper() == "TRUE")
-    assert_case("case 11: S1 carrier_MEN_AMonly=FALSE (now excludes ClinVar P/LP too)",
-                c_brca_row is not None
-                and c_brca_row["carrier_Multiple_Endocrine_Neoplasia_AMonly"].upper() == "FALSE",
-                f"got {c_brca_row and c_brca_row.get('carrier_Multiple_Endocrine_Neoplasia_AMonly')!r}")
-    assert_case("case 11: S1 carrier_Wilms_ClinVar=FALSE (WT1 chr3:950 was only 1*)",
-                c_brca_row is not None
-                and c_brca_row["carrier_Wilms_Tumor_Syndrome_ClinVar"].upper() == "FALSE",
-                f"got {c_brca_row and c_brca_row.get('carrier_Wilms_Tumor_Syndrome_ClinVar')!r}")
-    assert_case("case 11: S1 carrier_HBOC_ClinVar=FALSE (BRCA1 chr1:150 was Conflicting)",
-                c_brca_row is not None
-                and c_brca_row["carrier_Hereditary_Breast_and_Ovarian_Cancer_Syndrome_ClinVar"].upper() == "FALSE",
-                f"got {c_brca_row and c_brca_row.get('carrier_Hereditary_Breast_and_Ovarian_Cancer_Syndrome_ClinVar')!r}")
+    # Case 11: ClinVar in the 3-way Table B carrier list. Fixture mini_clinvar:
+    #   - MEN1  chr2:550 C>T  Pathogenic, 2*                        -> KEPT
+    #   - WT1   chr3:950 G>A  Likely_pathogenic, 1*                 -> DROPPED (<2*)
+    #   - BRCA1 chr1:300 A>G  Pathogenic, 3*, nonsense (PTV)        -> KEPT (exclude_ptv=false) but no carrier at chr1:300
+    #   - BRCA1 chr1:150 A>G  Conflicting                          -> DROPPED (exclude_conflicting)
+    #   - MLH1  chr1:180 A>AT Pathogenic, 2*, frameshift indel     -> KEPT (non-SNV)
+    # S1 carries MEN1 chr2:550 (AM primary + ClinVar).
+    assert_case("case 11: Table B has in_ClinVar_PLP column",
+                len(b_rows) > 0 and "in_ClinVar_PLP" in b_rows[0])
+    r = find_row(b_rows, sample_id="S1", chr="chr2", pos="550", gene="MEN1")
+    assert_case("case 11: B row for S1@chr2:550/MEN1 present", r is not None)
+    assert_case("case 11: MEN1 chr2:550 in_ClinVar_PLP=yes (Pathogenic, 2*)",
+                r is not None and r["in_ClinVar_PLP"] == "yes",
+                f"got {r and r.get('in_ClinVar_PLP')!r}")
+    assert_case("case 11: MEN1 chr2:550 category=AM+ClinVar (AM primary + ClinVar, not ACMG)",
+                r is not None and r["category"] == "AM+ClinVar",
+                f"got category={r and r.get('category')!r}")
+    assert_case("case 11: MEN1 chr2:550 clinvar_review_stars=2",
+                r is not None and str(r.get("clinvar_review_stars", "")).strip() == "2")
+    # WT1 chr3:950 was only 1* -> must NOT appear as a ClinVar carrier row
+    r_wt1 = find_row(b_rows, sample_id="S1", chr="chr3", pos="950", gene="WT1")
+    assert_case("case 11: WT1 chr3:950 (1*) not a ClinVar carrier in Table B",
+                r_wt1 is None or r_wt1.get("in_ClinVar_PLP") != "yes",
+                f"got {r_wt1 and r_wt1.get('in_ClinVar_PLP')!r}")
+
+    # Case 12: non-SNV (indel) + PTV-included ClinVar capture via the ALL-VARIANT
+    # QC pass. chr1:180 A>AT (frameshift) Pathogenic 2*, MLH1, carried by S1.
+    # The SNV-only AM path drops it; 01c (all-variant) keeps it, so it appears in
+    # Table B as a ClinVar carrier row. exclude_ptv=false keeps the frameshift.
+    r_indel_b = find_row(b_rows, sample_id="S1", chr="chr1", pos="180", gene="MLH1")
+    assert_case("case 12: indel chr1:180 A>AT present in Table B as ClinVar carrier (non-SNV kept)",
+                r_indel_b is not None and r_indel_b["in_ClinVar_PLP"] == "yes",
+                f"got row={r_indel_b!r}")
+    assert_case("case 12: indel chr1:180 ref/alt preserved (A/AT)",
+                r_indel_b is not None and r_indel_b.get("ref") == "A" and r_indel_b.get("alt") == "AT",
+                f"got ref/alt={r_indel_b and (r_indel_b.get('ref'), r_indel_b.get('alt'))!r}")
+    assert_case("case 12: indel chr1:180 in_AM_primary=no (SNV-only AM path never saw it)",
+                r_indel_b is not None and r_indel_b["in_AM_primary"] == "no")
+    # And confirm the indel really is absent from the SNV-only Table A (AM path).
+    r_indel_a = find_row(a_rows, sample_id="S1", chr="chr1", pos="180")
+    assert_case("case 12: indel chr1:180 ABSENT from SNV-only Table A (AM path unaffected)",
+                r_indel_a is None, "SNV-only QC should have dropped the indel from the AM path")
 
     print("\nALL ASSERTIONS PASSED")
     return 0

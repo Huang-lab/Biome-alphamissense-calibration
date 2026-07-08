@@ -8,7 +8,9 @@ Inputs:
 
 Outputs (under results/<cohort>/):
 - A_variant_level_per_person.tsv      <- copied/forwarded from step 03 input
-- B_ACMG_vs_AM_comparison.tsv         <- union of AM-primary and ACMG-PLP carriers
+- B_ACMG_vs_AM_comparison.tsv         <- 3-way carrier list: union of ACMG-PLP,
+                                         AM-primary, and ClinVar-P/LP carriers
+                                         (all variant types incl. ClinVar indels)
 - B_summary_by_gene.tsv               <- per-gene counts AM_only / ACMG_only / both
 - C_regression_matrix.tsv             <- one row per sample, regression-ready
 
@@ -174,10 +176,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     else:
         LOG.warning("ACMG file not found at %s; B comparison will be empty", acmg_path)
 
-    # ---- ClinVar P/LP >=2* carriers (standalone comparator, like ACMG) -----
-    # Built by python/annotate_clinvar.py (LSF step 02c). Join on (gene, sample)
-    # exactly like ACMG. Forwarded to results/ so the figure layer can read it.
+    # ---- ClinVar P/LP >=2* carriers (standalone comparator; ALL variant types) -
+    # Built by python/annotate_clinvar.py (LSF step 02c) from the all-variant QC
+    # VCF, so it includes non-SNV (indel/MNV) P/LP carriers. Forwarded to results/
+    # so the figure layer can read it. Two views:
+    #   clinvar_carrier_by_gene : gene_u -> {sample}                (summary)
+    #   clinvar_by_variant      : (sample,gene_u,chr,pos,ref,alt) -> {clnsig,stars}
+    #                             (variant-level, for the 3-way Table B carrier list)
     clinvar_carrier_by_gene: Dict[str, Set[str]] = defaultdict(set)
+    clinvar_by_variant: Dict[Tuple[str, str, str, str, str, str], dict] = {}
     clinvar_rows_kept = 0
     clinvar_src = os.path.join(intermediate_dir, args.cohort, "clinvar_carriers.tsv")
     clinvar_dst = os.path.join(out_dir, "clinvar_carriers.tsv")
@@ -188,12 +195,19 @@ def main(argv: Optional[List[str]] = None) -> int:
         for r in cv_rows:
             gene_u = (r.get("gene") or "").upper()
             sample = (r.get("sample_id") or "").strip()
-            if gene_u and sample:
-                clinvar_carrier_by_gene[gene_u].add(sample)
-                clinvar_rows_kept += 1
+            if not (gene_u and sample):
+                continue
+            clinvar_carrier_by_gene[gene_u].add(sample)
+            vkey = (sample, gene_u, r.get("chr", ""), r.get("pos", ""),
+                    r.get("ref", ""), r.get("alt", ""))
+            clinvar_by_variant[vkey] = {
+                "clnsig":       r.get("clinvar_clnsig", ""),
+                "review_stars": r.get("clinvar_review_stars", ""),
+            }
+            clinvar_rows_kept += 1
         LOG.info("ClinVar: loaded %d P/LP≥2★ carrier rows from %s", clinvar_rows_kept, clinvar_src)
     else:
-        LOG.warning("ClinVar carrier file not found at %s; ClinVar_PLP category will be empty "
+        LOG.warning("ClinVar carrier file not found at %s; ClinVar carriers will be empty "
                     "(run scripts/02c_annotate_clinvar.lsf + gather first)", clinvar_src)
 
     # ---- AM-primary + AM-global-0864 carriers by gene ----------------------
@@ -207,58 +221,95 @@ def main(argv: Optional[List[str]] = None) -> int:
         if _truthy(r.get("is_AM_carrier_global_0864", "")):
             am_global_0864_by_gene[gene_u].add(sample)
 
-    # ---- B_ACMG_vs_AM_comparison ------------------------------------------
-    b_header = list(a_header) + ["in_ACMG_PLP", "in_AM_primary", "category"]
+    # ---- B_ACMG_vs_AM_comparison — 3-way carrier list ----------------------
+    # One row per (sample, gene, variant) that is carried by ANY of the three
+    # tracks: ACMG P/LP, AM_calibrated (primary), or ClinVar P/LP ≥2★. Includes
+    # ALL variant types — ClinVar indels/MNVs come in via clinvar_by_variant even
+    # though the AM Table A is SNV-only. Membership flags + ClinVar clnsig/stars
+    # + a combined `category` label ("+"-joined of the tracks present).
+    def _category(in_acmg: bool, in_am: bool, in_clinvar: bool) -> str:
+        parts = []
+        if in_acmg:    parts.append("ACMG_PLP")
+        if in_am:      parts.append("AM")
+        if in_clinvar: parts.append("ClinVar")
+        return "+".join(parts) if parts else "none"
+
+    b_header = list(a_header) + ["in_ACMG_PLP", "in_AM_primary", "in_ClinVar_PLP",
+                                 "clinvar_clnsig", "clinvar_review_stars", "category"]
     b_rows: List[List[str]] = []
-    # union samples per (gene, variant): use a {(gene, sample): rep_row}
-    # We emit one row per AM record + one row per ACMG-only (gene,sample) without
-    # AM evidence — for those, fields beyond gene/sample are blank.
-    seen_keys: Set[Tuple[str, str, str, str, str, str]] = set()  # (gene,sample,chr,pos,ref,alt)
+    seen_keys: Set[Tuple[str, str, str, str, str, str]] = set()  # (sample,gene,chr,pos,ref,alt)
+
+    # 1) AM Table A rows (SNV): flag ACMG (gene-level) + ClinVar (variant-level).
     for r in a_rows:
         gene_u = (r.get("gene") or "").upper()
         sample = r.get("sample_id", "")
+        vkey = (sample, gene_u, r.get("chr", ""), r.get("pos", ""),
+                r.get("ref", ""), r.get("alt", ""))
         in_am = _truthy(r.get("is_AM_carrier_primary", ""))
         in_acmg = sample in acmg_carrier_by_gene.get(gene_u, set())
-        if not (in_am or in_acmg):
+        cv = clinvar_by_variant.get(vkey)
+        in_clinvar = cv is not None
+        if not (in_am or in_acmg or in_clinvar):
             continue
-        if in_am and in_acmg:
-            cat = "both"
-        elif in_am:
-            cat = "AM_only"
-        else:
-            cat = "ACMG_PLP_only"
         b_rows.append([r.get(h, "") for h in a_header] + [
-            "yes" if in_acmg else "no", "yes" if in_am else "no", cat
+            "yes" if in_acmg else "no", "yes" if in_am else "no",
+            "yes" if in_clinvar else "no",
+            cv["clnsig"] if cv else "", cv["review_stars"] if cv else "",
+            _category(in_acmg, in_am, in_clinvar),
         ])
-        seen_keys.add((gene_u, sample, r.get("chr",""), r.get("pos",""), r.get("ref",""), r.get("alt","")))
-    # ACMG-only (sample,gene) pairs with NO AM evidence on file
+        seen_keys.add(vkey)
+
+    # 2) ClinVar carriers not represented in Table A (e.g. non-SNV variants the
+    #    SNV-only AM path never emitted). One row per ClinVar variant, with
+    #    coords + clnsig/stars; AM fields blank; ACMG flagged at gene level.
+    for vkey, cv in clinvar_by_variant.items():
+        if vkey in seen_keys:
+            continue
+        sample, gene_u, chr_, pos_, ref_, alt_ = vkey
+        in_acmg = sample in acmg_carrier_by_gene.get(gene_u, set())
+        blanks = {h: "" for h in a_header}
+        blanks.update({"sample_id": sample, "cohort": args.cohort, "gene": gene_u,
+                       "chr": chr_, "pos": pos_, "ref": ref_, "alt": alt_,
+                       "passes_QC": "TRUE", "is_AM_carrier_primary": "FALSE",
+                       "would_be_carrier_domain_aggregate": "FALSE"})
+        b_rows.append([blanks.get(h, "") for h in a_header] + [
+            "yes" if in_acmg else "no", "no", "yes",
+            cv["clnsig"], cv["review_stars"], _category(in_acmg, False, True),
+        ])
+        seen_keys.add(vkey)
+
+    # 3) ACMG-only (sample,gene) pairs with NO AM/ClinVar variant on file.
     for gene_u, samples in acmg_carrier_by_gene.items():
         for sample in samples:
-            if any(k for k in seen_keys if k[0] == gene_u and k[1] == sample):
+            if any(k[0] == sample and k[1] == gene_u for k in seen_keys):
                 continue
             blanks = {h: "" for h in a_header}
-            blanks["sample_id"] = sample
-            blanks["cohort"] = args.cohort
-            blanks["gene"] = gene_u
-            blanks["passes_QC"] = "TRUE"
-            blanks["is_AM_carrier_primary"] = "FALSE"
-            blanks["would_be_carrier_domain_aggregate"] = "FALSE"
-            b_rows.append([blanks.get(h, "") for h in a_header] + ["yes", "no", "ACMG_PLP_only"])
+            blanks.update({"sample_id": sample, "cohort": args.cohort, "gene": gene_u,
+                           "passes_QC": "TRUE", "is_AM_carrier_primary": "FALSE",
+                           "would_be_carrier_domain_aggregate": "FALSE"})
+            b_rows.append([blanks.get(h, "") for h in a_header] + [
+                "yes", "no", "no", "", "", "ACMG_PLP",
+            ])
 
     b_path = os.path.join(out_dir, "B_ACMG_vs_AM_comparison.tsv")
     write_tsv(b_path, b_header, b_rows)
 
-    # ---- B_summary_by_gene -------------------------------------------------
+    # ---- B_summary_by_gene — per-gene carrier-row counts per track ---------
+    gene_i = a_header.index("gene")
+    n_h = len(a_header)  # in_ACMG_PLP, in_AM_primary, in_ClinVar_PLP are the next 3 cols
     counts: Dict[str, Counter] = defaultdict(Counter)
     for row in b_rows:
-        gene_u = (row[a_header.index("gene")] or "").upper()
-        cat = row[-1]
-        counts[gene_u][cat] += 1
-    bs_header = ["gene", "AM_only", "ACMG_PLP_only", "both"]
+        gene_u = (row[gene_i] or "").upper()
+        if row[n_h] == "yes":     counts[gene_u]["ACMG_PLP"] += 1
+        if row[n_h + 1] == "yes": counts[gene_u]["AM"] += 1
+        if row[n_h + 2] == "yes": counts[gene_u]["ClinVar"] += 1
+        counts[gene_u]["any"] += 1
+    bs_header = ["gene", "n_ACMG_PLP", "n_AM", "n_ClinVar_PLP", "n_any"]
     bs_rows = []
     for g in target_genes:
         c = counts.get(g.upper(), Counter())
-        bs_rows.append([g, c.get("AM_only", 0), c.get("ACMG_PLP_only", 0), c.get("both", 0)])
+        bs_rows.append([g, c.get("ACMG_PLP", 0), c.get("AM", 0),
+                        c.get("ClinVar", 0), c.get("any", 0)])
     write_tsv(os.path.join(out_dir, "B_summary_by_gene.tsv"), bs_header, bs_rows)
 
     # ---- C_regression_matrix ----------------------------------------------
@@ -270,7 +321,6 @@ def main(argv: Optional[List[str]] = None) -> int:
     for grp in group_names:
         c_header += [
             f"carrier_{grp}_ACMG",
-            f"carrier_{grp}_ClinVar",
             f"carrier_{grp}_AMprimary",
             f"carrier_{grp}_AMonly",
             f"carrier_{grp}_AM0864",
@@ -295,17 +345,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         # group carriers
         for grp in group_names:
             grp_genes = [g.upper() for g in groups[grp]]
-            acmg_hit    = any(sample in acmg_carrier_by_gene.get(g, set())    for g in grp_genes)
-            clinvar_hit = any(sample in clinvar_carrier_by_gene.get(g, set()) for g in grp_genes)
-            am_hit      = any(sample in am_primary_by_gene.get(g, set())      for g in grp_genes)
-            # AM_calibrated_not_PLP now subtracts BOTH clinical tracks.
-            am_only  = am_hit and not acmg_hit and not clinvar_hit
+            acmg_hit = any(sample in acmg_carrier_by_gene.get(g, set()) for g in grp_genes)
+            am_hit   = any(sample in am_primary_by_gene.get(g, set())   for g in grp_genes)
+            am_only  = am_hit and not acmg_hit
             am0864   = any(sample in am_global_0864_by_gene.get(g, set()) for g in grp_genes)
-            line += ["TRUE" if acmg_hit    else "FALSE",
-                     "TRUE" if clinvar_hit else "FALSE",
-                     "TRUE" if am_hit      else "FALSE",
-                     "TRUE" if am_only     else "FALSE",
-                     "TRUE" if am0864      else "FALSE"]
+            line += ["TRUE" if acmg_hit else "FALSE",
+                     "TRUE" if am_hit   else "FALSE",
+                     "TRUE" if am_only  else "FALSE",
+                     "TRUE" if am0864   else "FALSE"]
         c_rows.append(line)
 
     write_tsv(os.path.join(out_dir, "C_regression_matrix.tsv"), c_header, c_rows)
@@ -325,12 +372,12 @@ def main(argv: Optional[List[str]] = None) -> int:
                          f"(matched={rep_pc.matched}/{rep_pc.left_n})\n")
         fh.write(f"- ACMG P/LP rows kept: **{acmg_rows_kept}**; PTV-only excluded: **{acmg_rows_excluded_ptv}**\n")
         fh.write(f"- ClinVar P/LP ≥2★ carrier rows: **{clinvar_rows_kept}** "
-                 f"(SNV-only, PTV excluded — see refs/REFERENCE_REPORT.md caveat)\n")
+                 f"(all variant types incl. indels; normalized — see refs/REFERENCE_REPORT.md)\n")
         fh.write(f"- Table A rows (per sample × variant): **{len(a_rows)}**\n")
-        fh.write(f"- Table B rows (union AM/ACMG carriers): **{len(b_rows)}**\n")
+        fh.write(f"- Table B rows (union ACMG/AM/ClinVar carriers, all variant types): **{len(b_rows)}**\n")
         fh.write(f"- Table C rows (per sample, regression-ready): **{len(c_rows)}**\n\n")
         fh.write(f"### Carrier counts by gene group ({args.cohort})\n\n")
-        fh.write("| group | ACMG | ClinVar | AM-primary | AM-only |\n|---|---|---|---|---|\n")
+        fh.write("| group | ACMG | ClinVar | AM-primary | AM-only (excl. ACMG+ClinVar) |\n|---|---|---|---|---|\n")
         for grp in group_names:
             grp_genes = [g.upper() for g in groups[grp]]
             n_acmg = sum(1 for s in pheno_by_id if any(s in acmg_carrier_by_gene.get(g, set()) for g in grp_genes))

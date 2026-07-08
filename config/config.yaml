@@ -25,6 +25,13 @@ references:
   # genes + P/LP ≥2★ (see the `clinvar:` block) -> refs/clinvar_plp_2star.target_genes.tsv.gz
   clinvar_vcf_url: "https://ftp.ncbi.nlm.nih.gov/pub/clinvar/vcf_GRCh38/clinvar.vcf.gz"
   clinvar_vcf_local: ""           # optional pre-staged Minerva path; overrides URL
+  # GRCh38 reference FASTA the BioMe VCFs were called against. Required to
+  # LEFT-NORMALIZE indels (bcftools norm -f) on BOTH the ClinVar subset and the
+  # BioMe all-variant QC VCF so non-SNV ClinVar P/LP variants join reliably by
+  # (chrom,pos,ref,alt). If empty, the ClinVar pass falls back to exact-match
+  # (SNVs perfect; indels only when representations coincide) with a warning.
+  # Set this in config.local.yaml on Minerva.
+  reference_fasta: ""
 
 # -- Calibration (Chen/Pejaver variant-level table; per-variant LOOKUP) -------
 # 00_prepare_refs.sh wgets the Chen tarball, extracts it, and prepare_refs.py
@@ -181,15 +188,15 @@ acmg:
 # list and redefines AM_calibrated_not_PLP = AM-calibrated AND NOT ACMG P/LP
 # AND NOT ClinVar P/LP.
 #
-# CAVEAT: step 01 emits an SNV-only QC'd VCF, so this list covers target-gene
-# SNV P/LP variants (missense, nonsense, splice-region SNVs) — inframe indels
-# are out of reach. To stay comparable to the ACMG comparator (which drops PTV
-# rows) we also exclude PTV/LoF molecular consequences via ClinVar's `MC` field.
+# The ClinVar pass reads a dedicated ALL-VARIANT QC VCF (chr<N>.qc_allvar.vcf.gz,
+# same QC as step 01 but WITHOUT the SNV-only filter), so it captures non-SNV
+# P/LP variants (indels, MNVs) too. Both the ClinVar subset and that QC VCF are
+# left-normalized against references.reference_fasta so indels join reliably.
 clinvar:
   min_review_stars: 2             # CLNREVSTAT gold stars (0-4); keep >= this
   sig_include: ["Pathogenic", "Likely_pathogenic", "Pathogenic/Likely_pathogenic"]
   exclude_conflicting: true       # drop Conflicting_classifications_of_pathogenicity
-  exclude_ptv: true               # drop nonsense/frameshift/splice-acceptor/-donor (MC)
+  exclude_ptv: false              # keep P/LP regardless of consequence (PTV incl.)
 
 # -- LSF resources per stage (Minerva acc_DiseaseGeneCell / premium) ----------
 lsf:
@@ -199,6 +206,7 @@ lsf:
   step_01_qc_missense:     { n: 8,  W: "08:00", mem: "16000" }
   step_02_annotate_am:     { n: 8,  W: "12:00", mem: "24000" }    # annotation gets more
   step_02_gather:          { n: 2,  W: "02:00", mem: "8000"  }
+  step_01c_qc_clinvar:       { n: 8, W: "08:00", mem: "16000" }   # all-variant QC (no SNV filter) for ClinVar
   step_02c_annotate_clinvar: { n: 4, W: "08:00", mem: "16000" }   # standalone ClinVar pass
   step_02c_gather:           { n: 2, W: "02:00", mem: "8000"  }
   step_03_call_carriers:   { n: 4,  W: "04:00", mem: "16000" }

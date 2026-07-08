@@ -61,7 +61,16 @@ MODE="$(cfg_get "cohorts.${COHORT}.mode")"
 INTERMED="$(cfg_get paths.intermediate_dir)/${COHORT}"
 mkdir -p "$INTERMED" "$REPO_ROOT/logs"
 
-OUT_VCF="${INTERMED}/${CHR}.qc.vcf.gz"
+# Variant mode: "snv" (default; AM/Chen path — SNV-only) or "all" (ClinVar path —
+# keep indels/MNVs, add bcftools norm). Controlled by QC_VARIANT_MODE env so the
+# default behaviour (and every existing caller) is unchanged.
+VARIANT_MODE="${QC_VARIANT_MODE:-snv}"
+if [[ "$VARIANT_MODE" == "all" ]]; then
+    OUT_VCF="${INTERMED}/${CHR}.qc_allvar.vcf.gz"
+else
+    OUT_VCF="${INTERMED}/${CHR}.qc.vcf.gz"
+fi
+log "variant mode: ${VARIANT_MODE}  ->  $(basename "$OUT_VCF")"
 BED="$(cfg_get paths.refs_dir)/target_genes.exons.bed"
 [[ -s "$BED" ]] || die "exon BED missing or empty: $BED  (run scripts/00_prepare_refs.sh)"
 
@@ -136,11 +145,31 @@ bcftools view -H -r "$CHROM_VCF" -R "$JOB_BED" "$IN_VCF" 2>/dev/null \
     || die "multiallelic record encountered in ${CHROM_VCF}; pipeline requires biallelic"
 
 # ---- pipeline: region + FILTER -> mask failing GTs -> bgzip ----------------
-log "running QC pipeline"
-bcftools view -r "$CHROM_VCF" -R "$JOB_BED" $PASS_FLAG -Ou "$IN_VCF" \
-    | bcftools view -e 'TYPE!="snp"' -Ou - \
-    | bcftools +setGT - -- -t q -n . -i "$QC_EXPR" \
-    | bcftools view -Oz -o "$OUT_VCF" -
+log "running QC pipeline (mode=${VARIANT_MODE})"
+if [[ "$VARIANT_MODE" == "all" ]]; then
+    # ClinVar path: keep ALL variant types (indels/MNVs), left-normalize against
+    # the reference FASTA so indels match ClinVar's representation. If no FASTA
+    # is configured, skip norm (SNVs still exact; indels best-effort) with a warn.
+    REF_FASTA="$(cfg_get references.reference_fasta 2>/dev/null || echo '')"
+    case "$REF_FASTA" in /*) ;; "") ;; *) REF_FASTA="$REPO_ROOT/$REF_FASTA";; esac
+    if [[ -n "$REF_FASTA" && -s "$REF_FASTA" ]]; then
+        log "left-normalizing against reference: $REF_FASTA"
+        bcftools view -r "$CHROM_VCF" -R "$JOB_BED" $PASS_FLAG -Ou "$IN_VCF" \
+            | bcftools norm -f "$REF_FASTA" -Ou - \
+            | bcftools +setGT - -- -t q -n . -i "$QC_EXPR" \
+            | bcftools view -Oz -o "$OUT_VCF" -
+    else
+        warn "references.reference_fasta unset/missing; skipping norm for ClinVar all-variant QC — indel matching is best-effort only"
+        bcftools view -r "$CHROM_VCF" -R "$JOB_BED" $PASS_FLAG -Ou "$IN_VCF" \
+            | bcftools +setGT - -- -t q -n . -i "$QC_EXPR" \
+            | bcftools view -Oz -o "$OUT_VCF" -
+    fi
+else
+    bcftools view -r "$CHROM_VCF" -R "$JOB_BED" $PASS_FLAG -Ou "$IN_VCF" \
+        | bcftools view -e 'TYPE!="snp"' -Ou - \
+        | bcftools +setGT - -- -t q -n . -i "$QC_EXPR" \
+        | bcftools view -Oz -o "$OUT_VCF" -
+fi
 
 bcftools index --csi -f "$OUT_VCF"
 

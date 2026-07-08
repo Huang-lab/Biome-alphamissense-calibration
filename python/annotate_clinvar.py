@@ -11,12 +11,11 @@ ACMG P/LP list, giving a second clinical-truth comparator (`ClinVar_PLP`) and
 redefining `AM_calibrated_not_PLP` = AM-calibrated AND NOT ACMG P/LP AND NOT
 ClinVar P/LP.
 
-Input : QC'd per-chr VCF (intermediate/<cohort>/chr<N>.qc.vcf.gz)
+Input : ALL-VARIANT QC'd per-chr VCF (intermediate/<cohort>/chr<N>.qc_allvar.vcf.gz)
+        — same QC as step 01 but WITHOUT the SNV-only filter, so indels/MNVs are
+        retained. Both this VCF and the ClinVar subset are left-normalized against
+        the reference FASTA so non-SNV variants join reliably by (chrom,pos,ref,alt).
 Output: intermediate/<cohort>/chr<N>.clinvar_carriers.tsv (per (sample, variant))
-
-CAVEAT: step 01 emits an SNV-only VCF, so only target-gene SNV P/LP variants can
-match (inframe indels are out of reach); PTV consequences were dropped in the
-subset to match the ACMG comparator.
 """
 from __future__ import annotations
 

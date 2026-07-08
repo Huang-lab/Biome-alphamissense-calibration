@@ -47,9 +47,11 @@ log "02c_annotate_clinvar: cohort=$COHORT chr=$CHR  jobid=${LSB_JOBID:-local} ar
 
 INTERMED="$(cfg_get paths.intermediate_dir)/${COHORT}"
 mkdir -p "$INTERMED"
-IN_VCF="${INTERMED}/${CHR}.qc.vcf.gz"
+# Reads the ALL-VARIANT QC VCF (keeps indels/MNVs) produced by 01 in all mode,
+# NOT the SNV-only chr<N>.qc.vcf.gz used by the AM path.
+IN_VCF="${INTERMED}/${CHR}.qc_allvar.vcf.gz"
 OUT_TSV="${INTERMED}/${CHR}.clinvar_carriers.tsv"
-[[ -s "$IN_VCF" ]] || die "QC'd VCF missing: $IN_VCF  (step 01 must finish first)"
+[[ -s "$IN_VCF" ]] || die "all-variant QC'd VCF missing: $IN_VCF  (run 01 with QC_VARIANT_MODE=all first)"
 
 python3 "$REPO_ROOT/python/annotate_clinvar.py" \
     --config "$CONFIG_PATH" \

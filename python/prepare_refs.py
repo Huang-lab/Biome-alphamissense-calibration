@@ -599,9 +599,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     # ---- ClinVar P/LP >= 2-star subset (standalone comparator) --------------
     clinvar_cfg = cfg.get("clinvar", {}) or {}
     clinvar_subset_path = os.path.join(refs_dir, "clinvar_plp_2star.target_genes.tsv.gz")
-    clinvar_vcf = (cfg.get("references", {}).get("clinvar_vcf_local") or "").strip()
+    # Env first: 00_prepare_refs.sh exports BIOAM_CLINVAR_VCF pointing at the
+    # downloaded and/or left-normalized ClinVar VCF; that must win over the raw
+    # config path so the subset inherits the normalization.
+    clinvar_vcf = (os.environ.get("BIOAM_CLINVAR_VCF", "") or "").strip()
     if not clinvar_vcf:
-        clinvar_vcf = (os.environ.get("BIOAM_CLINVAR_VCF", "") or "").strip()
+        clinvar_vcf = (cfg.get("references", {}).get("clinvar_vcf_local") or "").strip()
     clinvar_summary: Dict[str, dict] = {g.upper(): {"n_clinvar_plp_2star": 0} for g in target_genes}
     clinvar_source = "NOT_AVAILABLE"
     if clinvar_vcf and os.path.isfile(clinvar_vcf):
@@ -840,9 +843,10 @@ def main(argv: Optional[List[str]] = None) -> int:
                  f"exclude_conflicting=**{clinvar_cfg.get('exclude_conflicting', True)}**; "
                  f"exclude_ptv=**{clinvar_cfg.get('exclude_ptv', True)}**")
     lines.append(f"- Total target-gene ClinVar P/LP ≥2★ variants: **{n_clinvar_total}**")
-    lines.append("- **CAVEAT:** step 01 emits an SNV-only QC'd VCF, so downstream ClinVar "
-                 "carriers cover target-gene *SNV* P/LP variants only (inframe indels are out "
-                 "of reach); PTV consequences are excluded to match the ACMG comparator.")
+    lines.append("- Carriers are called from the ALL-VARIANT QC VCF (chr<N>.qc_allvar.vcf.gz), "
+                 "so non-SNV P/LP variants (indels/MNVs) are included. Both sides are "
+                 "left-normalized against references.reference_fasta for reliable indel "
+                 "matching (best-effort exact match if no FASTA is set).")
     lines.append("")
     lines.append("| gene | n_ClinVar_PLP_≥2★ |")
     lines.append("|------|-------------------|")
