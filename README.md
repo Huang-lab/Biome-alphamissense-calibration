@@ -2,6 +2,21 @@
 
 Code-only LSF pipeline (manual `bsub`) for applying gene-specific calibrated AlphaMissense thresholds [Chen/Pejaver 2026](https://pmc.ncbi.nlm.nih.gov/articles/PMC13174790/#S2) to 28 cancer-predisposition genes in BioMe Cohort I (Regeneron) and Cohort II (Sema4), comparing against an existing ACMG P/LP set, and producing regression-ready tables.
 
+## Reproduce without Minerva (no PHI required)
+
+The real cohorts run only on Minerva (patient-identifiable inputs cannot be
+shared). To validate the pipeline end-to-end on the bundled **synthetic**
+fixtures — no Minerva, no PHI — clone the repo and run:
+
+```bash
+conda env create -f environment.yml && conda activate biome-am
+bash tests/run_test.sh          # runs steps 01→04 in-process + asserts behaviors
+```
+
+This exercises QC, AM annotation, carrier calling, and the ACMG-vs-AM
+comparison against `tests/data/` and prints `ALL TESTS PASSED` on success.
+Everything below is the full Minerva workflow for the real cohorts.
+
 ## Cohort input files (Minerva paths)
 
 All paths below are also encoded in `config/config.yaml` — that file is the single source of truth. This table is a quick reference.

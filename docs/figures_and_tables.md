@@ -6,9 +6,7 @@ This is the index a future auditor uses to reproduce any figure from raw
 data, and the index the rebuttal-letter author uses to cite the right
 panel next to each reviewer quote.
 
-For the full per-panel description, see the plan in
-`/root/.claude/plans/you-are-generating-a-graceful-honey.md`. For the
-reviewer-quote ↔ panel mapping, see
+For the reviewer-quote ↔ panel mapping, see
 `python/figures/reviewer_map.yaml`.
 
 ## Pipeline files (regenerate everything)
