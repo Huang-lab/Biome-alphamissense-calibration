@@ -29,6 +29,11 @@ log "config: $CONFIG_PATH"
 
 cd "$REPO_ROOT"
 
+# --only-clinvar fast path: (re)build ONLY the ClinVar subset, skipping the slow
+# Chen/AM/gencode ref rebuild. Detect it so we can also skip the Zenodo fetch.
+ONLY_CLINVAR=0
+for _a in "$@"; do [[ "$_a" == "--only-clinvar" ]] && ONLY_CLINVAR=1; done
+
 # requirements check
 for bin in python3 bgzip tabix; do
     command -v "$bin" >/dev/null 2>&1 || die "required binary not on PATH: $bin"
@@ -37,7 +42,11 @@ done
 # --- pre-fetch Chen/Pejaver variant-level calibration table via wget ---------
 # The python fetcher fails on Minerva login nodes whose outbound HTTPS allow-list
 # excludes zenodo.org. wget is a simpler dependency and the file's a direct
-# download (no API call). Skip if already extracted.
+# download (no API call). Skip if already extracted, or entirely in --only-clinvar.
+if [[ "$ONLY_CLINVAR" -eq 1 ]]; then
+    log "--only-clinvar: skipping Chen/Zenodo fetch and AM/gencode ref rebuild"
+fi
+if [[ "$ONLY_CLINVAR" -eq 0 ]]; then
 ZENODO_URL="$(python3 - <<'PY'
 import os, yaml
 cfg = os.environ['CONFIG_PATH']
@@ -68,6 +77,7 @@ if [[ -n "$ZENODO_URL" ]]; then
         warn "wget not on PATH; skipping Zenodo pre-fetch (will fall back to python requests or placeholder)"
     fi
 fi
+fi  # end: skip Chen/Zenodo fetch under --only-clinvar
 
 # --- pre-fetch ClinVar VCF (GRCh38) via wget --------------------------------
 # prepare_refs.subset_clinvar() reads it from references.clinvar_vcf_local, or

@@ -558,6 +558,49 @@ def subset_am(am_path: str, target_transcripts: Dict[str, str], out_path: str) -
 
 
 # ----------------------------------------------------------------------------
+# ClinVar-only fast path (skip the slow AM/Chen ref rebuild)
+# ----------------------------------------------------------------------------
+def _resolve_clinvar_vcf(cfg: dict) -> str:
+    """Env BIOAM_CLINVAR_VCF (normalized by 00) wins over config local path."""
+    v = (os.environ.get("BIOAM_CLINVAR_VCF", "") or "").strip()
+    if not v:
+        v = (cfg.get("references", {}).get("clinvar_vcf_local") or "").strip()
+    return v
+
+
+def _build_clinvar_only(cfg: dict, refs_dir: str, target_genes: List[str]) -> int:
+    """Build ONLY refs/clinvar_plp_2star.target_genes.tsv.gz + refs/CLINVAR_REPORT.md,
+    leaving the AM/Chen/gencode/BED refs untouched. Fast: no AM-TSV streaming."""
+    clinvar_cfg = cfg.get("clinvar", {}) or {}
+    clinvar_subset_path = os.path.join(refs_dir, "clinvar_plp_2star.target_genes.tsv.gz")
+    clinvar_vcf = _resolve_clinvar_vcf(cfg)
+    if not (clinvar_vcf and os.path.isfile(clinvar_vcf)):
+        die("--only-clinvar: no ClinVar VCF available (BIOAM_CLINVAR_VCF unset and "
+            "references.clinvar_vcf_local empty/missing). Run 00_prepare_refs.sh so it "
+            "downloads/normalizes ClinVar, or set references.clinvar_vcf_local.")
+    summary = subset_clinvar(clinvar_vcf, target_genes, clinvar_subset_path, clinvar_cfg)
+    n_total = sum(summary.get(g.upper(), {}).get("n_clinvar_plp_2star", 0) for g in target_genes)
+
+    report = os.path.join(refs_dir, "CLINVAR_REPORT.md")
+    with open(report, "w") as fh:
+        fh.write("# BioMe — ClinVar P/LP ≥2★ subset (built with --only-clinvar)\n\n")
+        fh.write(f"- ClinVar source: `{clinvar_vcf}`\n")
+        fh.write(f"- Filter: CLNSIG ∈ {sorted(clinvar_cfg.get('sig_include', []))}; "
+                 f"stars ≥ **{clinvar_cfg.get('min_review_stars', 2)}**; "
+                 f"exclude_conflicting=**{clinvar_cfg.get('exclude_conflicting', True)}**; "
+                 f"exclude_ptv=**{clinvar_cfg.get('exclude_ptv', False)}**\n")
+        fh.write(f"- Total target-gene ClinVar P/LP ≥2★ variants: **{n_total}**\n\n")
+        fh.write("| gene | n_ClinVar_PLP_≥2★ |\n|------|-------------------|\n")
+        for g in target_genes:
+            fh.write(f"| {g} | {summary.get(g.upper(), {}).get('n_clinvar_plp_2star', 0)} |\n")
+    LOG.info("wrote %s", report)
+    print(f"\n== ClinVar-only subset built: {n_total} target-gene P/LP ≥2★ variants -> "
+          f"{clinvar_subset_path} ==")
+    print(f"== review {report} ==")
+    return 0
+
+
+# ----------------------------------------------------------------------------
 # main
 # ----------------------------------------------------------------------------
 def main(argv: Optional[List[str]] = None) -> int:
@@ -565,6 +608,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--config", default=None)
     ap.add_argument("--skip-network", action="store_true",
                     help="skip Zenodo + GTF network fetches; useful in tests")
+    ap.add_argument("--only-clinvar", action="store_true",
+                    help="ONLY (re)build the ClinVar P/LP subset; skip the Chen/AM/"
+                         "gencode/BED work (which is slow and unchanged). Use after the "
+                         "AM refs already exist and only ClinVar is new.")
     args = ap.parse_args(argv)
     cfg = load_config(args.config)
 
@@ -572,6 +619,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     target_genes_set = {g.upper() for g in target_genes}
     refs_dir = resolve(cfg, cfg["paths"]["refs_dir"])
     os.makedirs(refs_dir, exist_ok=True)
+
+    if args.only_clinvar:
+        return _build_clinvar_only(cfg, refs_dir, target_genes)
 
     # ---- Chen/Pejaver variant-level calibration table (per-variant lookup) --
     cal_cfg = cfg.get("calibration", {})
