@@ -199,6 +199,8 @@ lsf:
   step_01_qc_missense:     { n: 8,  W: "08:00", mem: "16000" }
   step_02_annotate_am:     { n: 8,  W: "12:00", mem: "24000" }    # annotation gets more
   step_02_gather:          { n: 2,  W: "02:00", mem: "8000"  }
+  step_02c_annotate_clinvar: { n: 4, W: "08:00", mem: "16000" }   # standalone ClinVar pass
+  step_02c_gather:           { n: 2, W: "02:00", mem: "8000"  }
   step_03_call_carriers:   { n: 4,  W: "04:00", mem: "16000" }
   step_04_compare_tab:     { n: 4,  W: "04:00", mem: "16000" }
   step_05_run_stats:       { n: 4,  W: "02:00", mem: "16000" }
