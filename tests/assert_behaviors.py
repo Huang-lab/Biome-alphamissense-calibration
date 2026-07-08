@@ -224,6 +224,20 @@ def main(argv=None):
     assert_case("case 12: indel chr1:180 ABSENT from SNV-only Table A (AM path unaffected)",
                 r_indel_a is None, "SNV-only QC should have dropped the indel from the AM path")
 
+    # Case 13: ACMG P/LP variants are now shown WITH coordinates (variant-level),
+    # not gene-level blanks. S6 carries BRCA1 chr1:300_A_G (ACMG P/LP) but is not
+    # a VCF/AM carrier, so it enters Table B via the ACMG variant column.
+    r_acmg = find_row(b_rows, sample_id="S6", gene="BRCA1", pos="300")
+    assert_case("case 13: ACMG-only S6 BRCA1 chr1:300 present in Table B with coords",
+                r_acmg is not None, "ACMG variant coords should be parsed from the variant column")
+    assert_case("case 13: S6 chr1:300 in_ACMG_PLP=yes, in_AM_primary=no, category=ACMG_PLP",
+                r_acmg is not None and r_acmg["in_ACMG_PLP"] == "yes"
+                and r_acmg["in_AM_primary"] == "no" and r_acmg["category"] == "ACMG_PLP",
+                f"got {r_acmg!r}")
+    assert_case("case 13: S6 chr1:300 ref/alt populated (A/G), not blank",
+                r_acmg is not None and r_acmg.get("ref") == "A" and r_acmg.get("alt") == "G",
+                f"got ref/alt={r_acmg and (r_acmg.get('ref'), r_acmg.get('alt'))!r}")
+
     print("\nALL ASSERTIONS PASSED")
     return 0
 
