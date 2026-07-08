@@ -2,7 +2,7 @@
 Fig 1 — Summary of variant counts and carrier frequencies.
 
 Panels saved individually per cohort:
-  fig1A_venn_{cohort}.png           – overlap of ACMG P/LP vs AM_calibrated (Venn)
+  fig1A_venn_{cohort}.png           – 3-set overlap of ACMG P/LP vs AM_calibrated vs ClinVar P/LP (Venn)
   fig1B_variant_counts_{cohort}.png – unique variant counts per class
   fig1C_carrier_freq_{cohort}.png   – % of cohort with ≥1 carrier per class
   fig1D_carrier_by_group_{cohort}.png – carrier freq per phenotype group (3 subplots)
@@ -18,13 +18,12 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-import matplotlib.patches as patches
 import numpy as np
 import pandas as pd
 
 from python.figures.common import (
     build_variant_table, load_metadata, load_metadata_groups,
-    COLORS, VARIANT_CLASSES, VC_ACMG, VC_AM, VC_AM_ONLY, VC_BOTH,
+    COLORS, VARIANT_CLASSES, VC_ACMG, VC_CLINVAR, VC_AM, VC_AM_ONLY, VC_BOTH,
     FIGW_SINGLE, FIGW_DOUBLE,
     save_fig, save_table, cohort_label,
 )
@@ -35,6 +34,23 @@ N_MIN_GROUP = 20   # minimum group size to show in fig1D barplot
 def _count_unique_variants(vt, vc_list):
     sub = vt[vt["variant_class"].isin(vc_list)]
     return sub[["chrom", "pos", "ref", "alt"]].drop_duplicates().shape[0]
+
+
+def _venn_region_counts(vt):
+    """Unique-variant counts for the 7 regions of the ACMG / AM_calibrated /
+    ClinVar Venn. Dedupe by variant key and OR the membership flags."""
+    key = ["chrom", "pos", "ref", "alt"]
+    g = vt.groupby(key)[["in_acmg", "in_am", "in_clinvar"]].any()
+    A, B, C = g["in_acmg"], g["in_am"], g["in_clinvar"]
+    return {
+        "Abc": int((A & ~B & ~C).sum()),   # ACMG only
+        "aBc": int((~A & B & ~C).sum()),   # AM only
+        "ABc": int((A & B & ~C).sum()),    # ACMG & AM
+        "abC": int((~A & ~B & C).sum()),   # ClinVar only
+        "AbC": int((A & ~B & C).sum()),    # ACMG & ClinVar
+        "aBC": int((~A & B & C).sum()),    # AM & ClinVar
+        "ABC": int((A & B & C).sum()),     # all three
+    }
 
 
 def make(cohort="cohortI"):
@@ -48,59 +64,62 @@ def make(cohort="cohortI"):
     # -----------------------------------------------------------------------
     # Compute counts
     # -----------------------------------------------------------------------
-    acmg_vars   = _count_unique_variants(vt, [VC_ACMG, VC_BOTH])
-    am_vars     = _count_unique_variants(vt, [VC_AM_ONLY, VC_BOTH])
-    amonly_vars = _count_unique_variants(vt, [VC_AM_ONLY])
-    both_vars   = _count_unique_variants(vt, [VC_BOTH])
+    reg = _venn_region_counts(vt)
+    acmg_vars    = reg["Abc"] + reg["ABc"] + reg["AbC"] + reg["ABC"]   # any ACMG
+    clinvar_vars = reg["abC"] + reg["AbC"] + reg["aBC"] + reg["ABC"]   # any ClinVar
+    am_vars      = reg["aBc"] + reg["ABc"] + reg["aBC"] + reg["ABC"]   # any AM
+    amonly_vars  = reg["aBc"]                                           # AM only (no clinical)
 
-    acmg_carriers   = vt[vt["variant_class"].isin([VC_ACMG, VC_BOTH])]["sample_id"].nunique()
-    am_carriers     = vt[vt["variant_class"].isin([VC_AM_ONLY, VC_BOTH])]["sample_id"].nunique()
-    amonly_carriers = vt[vt["variant_class"] == VC_AM_ONLY]["sample_id"].nunique()
+    acmg_carriers    = vt[vt["in_acmg"] == True]["sample_id"].nunique()
+    clinvar_carriers = vt[vt["in_clinvar"] == True]["sample_id"].nunique()
+    am_carriers      = vt[vt["in_am"] == True]["sample_id"].nunique()
+    amonly_carriers  = vt[vt["variant_class"] == VC_AM_ONLY]["sample_id"].nunique()
 
-    labels    = [VC_ACMG, VC_AM, VC_AM_ONLY]
+    labels    = [VC_ACMG, VC_CLINVAR, VC_AM, VC_AM_ONLY]
     colors    = [COLORS[l] for l in labels]
-    var_counts  = [acmg_vars, am_vars, amonly_vars]
-    carr_counts = [acmg_carriers, am_carriers, amonly_carriers]
+    var_counts  = [acmg_vars, clinvar_vars, am_vars, amonly_vars]
+    carr_counts = [acmg_carriers, clinvar_carriers, am_carriers, amonly_carriers]
     carr_pcts   = [c / total_n * 100 for c in carr_counts]
 
     # -----------------------------------------------------------------------
-    # Panel A — Venn diagram
+    # Panel A — 3-set Venn (ACMG P/LP vs AM_calibrated vs ClinVar P/LP)
     # -----------------------------------------------------------------------
-    fig_a, ax = plt.subplots(figsize=(6, 5))
-    ax.set_xlim(0, 10)
-    ax.set_ylim(0, 7)
-    ax.set_aspect("equal")
-    ax.axis("off")
-
-    c1 = patches.Circle((3.8, 3.5), 2.6,
-                         facecolor=COLORS[VC_ACMG] + "55",
-                         edgecolor=COLORS[VC_ACMG], linewidth=2)
-    c2 = patches.Circle((6.2, 3.5), 2.6,
-                         facecolor=COLORS[VC_AM] + "55",
-                         edgecolor=COLORS[VC_AM], linewidth=2)
-    ax.add_patch(c1)
-    ax.add_patch(c2)
-
-    acmg_only_vars = acmg_vars - both_vars
-    ax.text(2.4, 3.5, f"{acmg_only_vars:,}\nvariants",
-            ha="center", va="center", fontsize=14, fontweight="bold",
-            color=COLORS[VC_ACMG])
-    ax.text(5.0, 3.5, f"{both_vars:,}\nboth",
-            ha="center", va="center", fontsize=13, color="#555555")
-    ax.text(7.6, 3.5, f"{amonly_vars:,}\nvariants",
-            ha="center", va="center", fontsize=14, fontweight="bold",
-            color=COLORS[VC_AM])
-    ax.text(2.4, 6.3, "ACMG P/LP", ha="center", va="center",
-            fontsize=13, color=COLORS[VC_ACMG], fontweight="bold")
-    ax.text(7.6, 6.3, "AM_calibrated", ha="center", va="center",
-            fontsize=13, color=COLORS[VC_AM], fontweight="bold")
-    ax.set_title(f"Variant overlap — {cohort_label(cohort)}", fontsize=14, fontweight="bold", pad=4)
+    fig_a, ax = plt.subplots(figsize=(6.5, 5.5))
+    # venn3 subset order: (Abc, aBc, ABc, abC, AbC, aBC, ABC) for sets (A,B,C).
+    subsets = (reg["Abc"], reg["aBc"], reg["ABc"],
+               reg["abC"], reg["AbC"], reg["aBC"], reg["ABC"])
+    _drew_venn = False
+    try:
+        from matplotlib_venn import venn3, venn3_circles
+        v = venn3(subsets=subsets,
+                  set_labels=("ACMG P/LP", "AM_calibrated", "ClinVar P/LP"),
+                  ax=ax)
+        venn3_circles(subsets=subsets, ax=ax, linewidth=1.5)
+        patch_colors = {"100": COLORS[VC_ACMG], "010": COLORS[VC_AM], "001": COLORS[VC_CLINVAR]}
+        for pid, col in patch_colors.items():
+            p = v.get_patch_by_id(pid)
+            if p is not None:
+                p.set_color(col)
+                p.set_alpha(0.45)
+        _drew_venn = True
+    except Exception as e:  # noqa: BLE001 — fall back if matplotlib_venn absent
+        print(f"  [warn] matplotlib_venn unavailable ({e}); drawing text fallback")
+        ax.axis("off")
+        ax.text(0.5, 0.5,
+                "ACMG only: {Abc}\nAM only: {aBc}\nClinVar only: {abC}\n"
+                "ACMG∩AM: {ABc}\nACMG∩ClinVar: {AbC}\nAM∩ClinVar: {aBC}\n"
+                "all three: {ABC}".format(**reg),
+                ha="center", va="center", fontsize=12, transform=ax.transAxes)
+    ax.set_title(f"Variant overlap — {cohort_label(cohort)}",
+                 fontsize=14, fontweight="bold", pad=4)
     plt.tight_layout()
     save_fig(fig_a, "fig1A_venn", cohort=cohort)
 
     venn_data = pd.DataFrame({
-        "category":          ["ACMG P/LP only", "AM_calibrated only", "both"],
-        "n_unique_variants": [acmg_only_vars, amonly_vars, both_vars],
+        "category": ["ACMG P/LP only", "AM_calibrated only", "ClinVar P/LP only",
+                     "ACMG & AM", "ACMG & ClinVar", "AM & ClinVar", "all three"],
+        "n_unique_variants": [reg["Abc"], reg["aBc"], reg["abC"],
+                              reg["ABc"], reg["AbC"], reg["aBC"], reg["ABC"]],
     })
     save_table(venn_data, "fig1A_venn_data", cohort=cohort)
 
@@ -167,8 +186,9 @@ def make(cohort="cohortI"):
 
     rows_d = []
     for vc, vc_filter in [
-        (VC_ACMG,    vt[vt["in_acmg"] == True]),
-        (VC_AM,      vt[vt["in_am"]   == True]),
+        (VC_ACMG,    vt[vt["in_acmg"]    == True]),
+        (VC_CLINVAR, vt[vt["in_clinvar"] == True]),
+        (VC_AM,      vt[vt["in_am"]      == True]),
         (VC_AM_ONLY, vt[vt["variant_class"] == VC_AM_ONLY]),
     ]:
         vc_carriers_set = set(vc_filter["sample_id"].unique())
@@ -198,11 +218,12 @@ def make(cohort="cohortI"):
 
     vc_slugs_d = {
         VC_ACMG:    "fig1D_ACMGplp",
+        VC_CLINVAR: "fig1D_ClinVarPLP",
         VC_AM:      "fig1D_AMcalibrated",
         VC_AM_ONLY: "fig1D_AMcalibratedNotPLP",
     }
 
-    for vc in [VC_ACMG, VC_AM, VC_AM_ONLY]:
+    for vc in [VC_ACMG, VC_CLINVAR, VC_AM, VC_AM_ONLY]:
         sub = df_d[df_d["variant_class"] == vc].copy()
         sub = sub.sort_values("pct", ascending=False).reset_index(drop=True)
 

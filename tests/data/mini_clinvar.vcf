@@ -1,0 +1,10 @@
+##fileformat=VCFv4.1
+##INFO=<ID=CLNSIG,Number=.,Type=String,Description="Clinical significance">
+##INFO=<ID=CLNREVSTAT,Number=.,Type=String,Description="Review status">
+##INFO=<ID=GENEINFO,Number=1,Type=String,Description="Gene(s)">
+##INFO=<ID=MC,Number=.,Type=String,Description="Molecular consequence">
+#CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO
+2	550	1001	C	T	.	.	CLNSIG=Pathogenic;CLNREVSTAT=criteria_provided,_multiple_submitters,_no_conflicts;GENEINFO=MEN1:4221;MC=SO:0001583|missense_variant
+3	950	1002	G	A	.	.	CLNSIG=Likely_pathogenic;CLNREVSTAT=criteria_provided,_single_submitter;GENEINFO=WT1:7490;MC=SO:0001583|missense_variant
+1	300	1003	A	G	.	.	CLNSIG=Pathogenic;CLNREVSTAT=reviewed_by_expert_panel;GENEINFO=BRCA1:672;MC=SO:0001587|nonsense
+1	150	1004	A	G	.	.	CLNSIG=Conflicting_classifications_of_pathogenicity;CLNREVSTAT=criteria_provided,_conflicting_classifications;GENEINFO=BRCA1:672;MC=SO:0001583|missense_variant

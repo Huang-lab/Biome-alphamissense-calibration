@@ -82,14 +82,16 @@ COHORT_META = {
 # Variant class constants
 # ---------------------------------------------------------------------------
 VC_ACMG    = "ACMG P/LP"
+VC_CLINVAR = "ClinVar P/LP"
 VC_AM      = "AM_calibrated"
-VC_AM_ONLY = "AM_calibrated not P/LP"
+VC_AM_ONLY = "AM_calibrated not P/LP"   # now excludes ACMG P/LP AND ClinVar P/LP
 VC_BOTH    = "both"           # used only for Venn diagram in fig1
 
-VARIANT_CLASSES = [VC_ACMG, VC_AM, VC_AM_ONLY]   # display order in all figures
+VARIANT_CLASSES = [VC_ACMG, VC_CLINVAR, VC_AM, VC_AM_ONLY]   # display order in all figures
 
 COLORS = {
     VC_ACMG:    "#4D4D4D",   # dark gray
+    VC_CLINVAR: "#5AAE61",   # green
     VC_AM:      "#2166AC",   # blue
     VC_AM_ONLY: "#D6604D",   # red-orange
     VC_BOTH:    "#D1E5F0",   # light blue (Venn only)
@@ -312,6 +314,29 @@ def load_am_carriers(cohort="cohortI"):
     return df[["sample_id", "gene", "chrom", "pos", "ref", "alt"]].drop_duplicates()
 
 
+def load_clinvar_carriers(cohort="cohortI"):
+    """Load ClinVar P/LP ≥2★ carrier variants (standalone comparator).
+
+    Reads results/<cohort>/clinvar_carriers.tsv, forwarded by compare_tabulate.py
+    from the step-02c ClinVar annotation pass. Returns DataFrame with columns:
+        sample_id, gene, chrom, pos, ref, alt
+    (empty frame with those columns if the file is absent — e.g. ClinVar not yet
+    run, so figures degrade gracefully rather than crash).
+    """
+    base = RESULTS_I if cohort == "cohortI" else RESULTS_II
+    path = os.path.join(base, "clinvar_carriers.tsv")
+    cols = ["sample_id", "gene", "chrom", "pos", "ref", "alt"]
+    if not os.path.isfile(path):
+        print(f"  [warn] ClinVar carrier file not found for {cohort}: {path}; "
+              f"ClinVar_PLP will be empty")
+        return pd.DataFrame(columns=cols)
+    df = _tsv(path)
+    df = df.rename(columns={"chr": "chrom"})
+    # sample_id comes from the same VCF as Table A (load_am_carriers), so no
+    # type coercion is needed; build_variant_table casts to str before merging.
+    return df[cols].drop_duplicates()
+
+
 def load_pcs(cohort="cohortI"):
     """Load PC1–PC10 for each sample.
 
@@ -356,15 +381,19 @@ def build_variant_table(cohort="cohortI"):
     Returns DataFrame[sample_id, gene, syndrome, chrom, pos, ref, alt,
                        in_acmg, in_am, variant_class]
     """
-    acmg = load_acmg_carriers(cohort).copy()
-    am   = load_am_carriers(cohort).copy()
+    acmg    = load_acmg_carriers(cohort).copy()
+    am      = load_am_carriers(cohort).copy()
+    clinvar = load_clinvar_carriers(cohort).copy()
 
-    # Coerce both sample_id columns to the same string type before merging
-    acmg["sample_id"] = acmg["sample_id"].astype(str)
-    am["sample_id"]   = am["sample_id"].astype(str)
+    # Coerce all sample_id columns to the same string type before merging
+    acmg["sample_id"]    = acmg["sample_id"].astype(str)
+    am["sample_id"]      = am["sample_id"].astype(str)
+    if not clinvar.empty:
+        clinvar["sample_id"] = clinvar["sample_id"].astype(str)
 
-    acmg["in_acmg"] = True
-    am["in_am"]     = True
+    acmg["in_acmg"]       = True
+    am["in_am"]           = True
+    clinvar["in_clinvar"] = True
 
     # Variant key for matching
     key_cols = ["sample_id", "gene", "pos", "ref", "alt"]
@@ -374,29 +403,45 @@ def build_variant_table(cohort="cohortI"):
         am[key_cols + ["in_am"]],
         on=key_cols, how="outer"
     )
-    merged["in_acmg"] = merged["in_acmg"].notna() & (merged["in_acmg"] == True)
-    merged["in_am"]   = merged["in_am"].notna()   & (merged["in_am"]   == True)
+    merged = pd.merge(
+        merged,
+        clinvar[key_cols + ["in_clinvar"]],
+        on=key_cols, how="outer"
+    )
+    merged["in_acmg"]    = merged["in_acmg"].notna()    & (merged["in_acmg"]    == True)
+    merged["in_am"]      = merged["in_am"].notna()      & (merged["in_am"]      == True)
+    merged["in_clinvar"] = merged["in_clinvar"].notna() & (merged["in_clinvar"] == True)
 
     def classify(row):
+        # Precedence: ACMG∩AM -> Venn "both"; ACMG dominates; then a variant is
+        # only "AM_calibrated not P/LP" when NEITHER clinical list carries it.
         if row["in_acmg"] and row["in_am"]:
             return VC_BOTH
         elif row["in_acmg"]:
             return VC_ACMG
-        else:
+        elif row["in_am"] and row["in_clinvar"]:
+            return VC_AM
+        elif row["in_am"]:
             return VC_AM_ONLY
+        else:
+            return VC_CLINVAR   # ClinVar-only variant (no AM/ACMG evidence)
 
     merged["variant_class"] = merged.apply(classify, axis=1)
 
     # Add syndrome
     merged["syndrome"] = merged["gene"].map(GENE_TO_SYNDROME)
 
-    # Fill missing chrom from AM table (ACMG-only rows didn't join chrom from am)
+    # Fill missing chrom from AM then ClinVar (ACMG-only / ClinVar-only rows
+    # didn't join chrom from am)
     am_chrom = am.set_index(key_cols)["chrom"].to_dict()
+    cv_chrom = (clinvar.set_index(key_cols)["chrom"].to_dict()
+                if not clinvar.empty else {})
     merged["chrom"] = merged["chrom"].astype(object)
     missing_mask = merged["chrom"].isna()
     if missing_mask.any():
         keys = merged.loc[missing_mask, key_cols].apply(tuple, axis=1)
-        merged.loc[missing_mask, "chrom"] = keys.map(lambda k: am_chrom.get(k))
+        merged.loc[missing_mask, "chrom"] = keys.map(
+            lambda k: am_chrom.get(k) or cv_chrom.get(k))
 
     return merged.reset_index(drop=True)
 
@@ -419,11 +464,11 @@ def build_carrier_matrix(cohort="cohortI"):
     # --- ACMG P/LP carriers (ACMG-only + both) ---
     acmg_carriers = vt[vt["in_acmg"] == True][["sample_id", "gene", "syndrome"]].drop_duplicates()
 
+    # --- ClinVar P/LP carriers ---
+    clinvar_carriers = vt[vt["in_clinvar"] == True][["sample_id", "gene", "syndrome"]].drop_duplicates()
+
     # --- AM_calibrated carriers (AM-only + both) ---
     am_carriers = vt[vt["in_am"] == True][["sample_id", "gene", "syndrome"]].drop_duplicates()
-
-    # --- AM_calibrated not P/LP (AM-only) ---
-    am_only_carriers = vt[vt["variant_class"] == VC_AM_ONLY][["sample_id", "gene", "syndrome"]].drop_duplicates()
 
     meta = load_metadata_groups(cohort)
     try:
@@ -453,12 +498,19 @@ def build_carrier_matrix(cohort="cohortI"):
     for syn_key in SYNDROME_ORDER:
         for vc_label, vc_df in [
             ("ACMG_PLP",      acmg_carriers),
+            ("ClinVar",       clinvar_carriers),
             ("AM_calibrated", am_carriers),
-            ("AM_not_PLP",    am_only_carriers),
         ]:
             syn_carriers = vc_df[vc_df["syndrome"] == syn_key]["sample_id"].unique()
             col = f"carrier_{syn_key}_{vc_label}"
             carrier_df[col] = carrier_df["sample_id"].isin(syn_carriers)
+        # AM_not_PLP derived at the SYNDROME level to match Table C exactly:
+        # AM-calibrated AND NOT ACMG P/LP AND NOT ClinVar P/LP.
+        carrier_df[f"carrier_{syn_key}_AM_not_PLP"] = (
+            carrier_df[f"carrier_{syn_key}_AM_calibrated"]
+            & ~carrier_df[f"carrier_{syn_key}_ACMG_PLP"]
+            & ~carrier_df[f"carrier_{syn_key}_ClinVar"]
+        )
 
     result = meta.merge(carrier_df, on="sample_id", how="left")
     bool_cols = [c for c in result.columns if c.startswith("carrier_")]

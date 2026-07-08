@@ -42,6 +42,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     cfg = load_config(args.config)
     results_dir = resolve(cfg, cfg["paths"]["results_dir"])
+    intermediate_dir = resolve(cfg, cfg["paths"]["intermediate_dir"])
     out_dir = os.path.join(results_dir, args.cohort)
     os.makedirs(out_dir, exist_ok=True)
 
@@ -173,6 +174,28 @@ def main(argv: Optional[List[str]] = None) -> int:
     else:
         LOG.warning("ACMG file not found at %s; B comparison will be empty", acmg_path)
 
+    # ---- ClinVar P/LP >=2* carriers (standalone comparator, like ACMG) -----
+    # Built by python/annotate_clinvar.py (LSF step 02c). Join on (gene, sample)
+    # exactly like ACMG. Forwarded to results/ so the figure layer can read it.
+    clinvar_carrier_by_gene: Dict[str, Set[str]] = defaultdict(set)
+    clinvar_rows_kept = 0
+    clinvar_src = os.path.join(intermediate_dir, args.cohort, "clinvar_carriers.tsv")
+    clinvar_dst = os.path.join(out_dir, "clinvar_carriers.tsv")
+    if os.path.isfile(clinvar_src):
+        if os.path.abspath(clinvar_src) != os.path.abspath(clinvar_dst):
+            shutil.copyfile(clinvar_src, clinvar_dst)
+        _cv_header, cv_rows = read_tsv_dicts(clinvar_dst)
+        for r in cv_rows:
+            gene_u = (r.get("gene") or "").upper()
+            sample = (r.get("sample_id") or "").strip()
+            if gene_u and sample:
+                clinvar_carrier_by_gene[gene_u].add(sample)
+                clinvar_rows_kept += 1
+        LOG.info("ClinVar: loaded %d P/LP≥2★ carrier rows from %s", clinvar_rows_kept, clinvar_src)
+    else:
+        LOG.warning("ClinVar carrier file not found at %s; ClinVar_PLP category will be empty "
+                    "(run scripts/02c_annotate_clinvar.lsf + gather first)", clinvar_src)
+
     # ---- AM-primary + AM-global-0864 carriers by gene ----------------------
     am_primary_by_gene: Dict[str, Set[str]] = defaultdict(set)
     am_global_0864_by_gene: Dict[str, Set[str]] = defaultdict(set)
@@ -247,6 +270,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     for grp in group_names:
         c_header += [
             f"carrier_{grp}_ACMG",
+            f"carrier_{grp}_ClinVar",
             f"carrier_{grp}_AMprimary",
             f"carrier_{grp}_AMonly",
             f"carrier_{grp}_AM0864",
@@ -271,14 +295,17 @@ def main(argv: Optional[List[str]] = None) -> int:
         # group carriers
         for grp in group_names:
             grp_genes = [g.upper() for g in groups[grp]]
-            acmg_hit = any(sample in acmg_carrier_by_gene.get(g, set()) for g in grp_genes)
-            am_hit   = any(sample in am_primary_by_gene.get(g, set())   for g in grp_genes)
-            am_only  = am_hit and not acmg_hit
+            acmg_hit    = any(sample in acmg_carrier_by_gene.get(g, set())    for g in grp_genes)
+            clinvar_hit = any(sample in clinvar_carrier_by_gene.get(g, set()) for g in grp_genes)
+            am_hit      = any(sample in am_primary_by_gene.get(g, set())      for g in grp_genes)
+            # AM_calibrated_not_PLP now subtracts BOTH clinical tracks.
+            am_only  = am_hit and not acmg_hit and not clinvar_hit
             am0864   = any(sample in am_global_0864_by_gene.get(g, set()) for g in grp_genes)
-            line += ["TRUE" if acmg_hit else "FALSE",
-                     "TRUE" if am_hit   else "FALSE",
-                     "TRUE" if am_only  else "FALSE",
-                     "TRUE" if am0864   else "FALSE"]
+            line += ["TRUE" if acmg_hit    else "FALSE",
+                     "TRUE" if clinvar_hit else "FALSE",
+                     "TRUE" if am_hit      else "FALSE",
+                     "TRUE" if am_only     else "FALSE",
+                     "TRUE" if am0864      else "FALSE"]
         c_rows.append(line)
 
     write_tsv(os.path.join(out_dir, "C_regression_matrix.tsv"), c_header, c_rows)
@@ -297,18 +324,22 @@ def main(argv: Optional[List[str]] = None) -> int:
                 fh.write(f"- phenotype↔PC match rate: **{rep_pc.match_rate:.3f}**  "
                          f"(matched={rep_pc.matched}/{rep_pc.left_n})\n")
         fh.write(f"- ACMG P/LP rows kept: **{acmg_rows_kept}**; PTV-only excluded: **{acmg_rows_excluded_ptv}**\n")
+        fh.write(f"- ClinVar P/LP ≥2★ carrier rows: **{clinvar_rows_kept}** "
+                 f"(SNV-only, PTV excluded — see refs/REFERENCE_REPORT.md caveat)\n")
         fh.write(f"- Table A rows (per sample × variant): **{len(a_rows)}**\n")
         fh.write(f"- Table B rows (union AM/ACMG carriers): **{len(b_rows)}**\n")
         fh.write(f"- Table C rows (per sample, regression-ready): **{len(c_rows)}**\n\n")
         fh.write(f"### Carrier counts by gene group ({args.cohort})\n\n")
-        fh.write("| group | ACMG | AM-primary | AM-only |\n|---|---|---|---|\n")
+        fh.write("| group | ACMG | ClinVar | AM-primary | AM-only |\n|---|---|---|---|---|\n")
         for grp in group_names:
             grp_genes = [g.upper() for g in groups[grp]]
             n_acmg = sum(1 for s in pheno_by_id if any(s in acmg_carrier_by_gene.get(g, set()) for g in grp_genes))
+            n_cv   = sum(1 for s in pheno_by_id if any(s in clinvar_carrier_by_gene.get(g, set()) for g in grp_genes))
             n_am   = sum(1 for s in pheno_by_id if any(s in am_primary_by_gene.get(g, set())   for g in grp_genes))
             n_only = sum(1 for s in pheno_by_id if any(s in am_primary_by_gene.get(g, set())   for g in grp_genes)
-                         and not any(s in acmg_carrier_by_gene.get(g, set()) for g in grp_genes))
-            fh.write(f"| {grp} | {n_acmg} | {n_am} | {n_only} |\n")
+                         and not any(s in acmg_carrier_by_gene.get(g, set())    for g in grp_genes)
+                         and not any(s in clinvar_carrier_by_gene.get(g, set()) for g in grp_genes))
+            fh.write(f"| {grp} | {n_acmg} | {n_cv} | {n_am} | {n_only} |\n")
         if rep.left_only_samples:
             fh.write(f"\n*VCF IDs not in phenotype (up to 5):* `{rep.left_only_samples[:5]}`\n")
         if rep.right_only_samples:

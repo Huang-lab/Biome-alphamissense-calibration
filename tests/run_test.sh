@@ -64,6 +64,8 @@ references:
   gencode_transcript_map: "$DATA/mini_gencode_map.tsv"
   gencode_gtf_url: ""
   gencode_gtf_local: "$DATA/mini_gencode.gtf"
+  clinvar_vcf_url: ""
+  clinvar_vcf_local: "$DATA/mini_clinvar.vcf"
 
 calibration:
   zenodo_record: "TEST"
@@ -156,6 +158,12 @@ acmg:
   annotation_filter_substr: "P/LP"
   annotation_column: "annotation"
 
+clinvar:
+  min_review_stars: 2
+  sig_include: ["Pathogenic", "Likely_pathogenic", "Pathogenic/Likely_pathogenic"]
+  exclude_conflicting: true
+  exclude_ptv: true
+
 lsf:
   project: "acc_test"
   queue: "test"
@@ -197,9 +205,16 @@ for COHORT in cohortI cohortII; do
         log "==== 02_annotate_am  cohort=$COHORT chr$i ===="
         bash "$REPO_ROOT/scripts/02_annotate_am.lsf"
     done
+    for i in $(seq 1 22); do
+        export TEST_CHR_IDX=$i
+        log "==== 02c_annotate_clinvar  cohort=$COHORT chr$i ===="
+        bash "$REPO_ROOT/scripts/02c_annotate_clinvar.lsf"
+    done
     unset TEST_CHR_IDX
     log "==== 02_gather  cohort=$COHORT ===="
     bash "$REPO_ROOT/scripts/02_gather.lsf"
+    log "==== 02c_gather_clinvar  cohort=$COHORT ===="
+    bash "$REPO_ROOT/scripts/02c_gather_clinvar.lsf"
     log "==== 03_call_carriers  cohort=$COHORT ===="
     bash "$REPO_ROOT/scripts/03_call_carriers.lsf"
     log "==== 04_compare_and_tabulate  cohort=$COHORT ===="

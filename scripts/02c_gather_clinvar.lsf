@@ -1,0 +1,66 @@
+#!/bin/bash
+#BSUB -J biome_am_02c_gather
+#BSUB -P acc_DiseaseGeneCell
+#BSUB -q premium
+#BSUB -n 2
+#BSUB -W 02:00
+#BSUB -R rusage[mem=8000]
+#BSUB -R span[hosts=1]
+#BSUB -o logs/02c_gather_clinvar.%J.stdout
+#BSUB -eo logs/02c_gather_clinvar.%J.stderr
+#BSUB -L /bin/bash
+# =============================================================================
+# 02c_gather_clinvar.lsf — non-array gather: verify all 22 per-chr ClinVar
+# carrier TSVs exist, then concatenate to
+# intermediate/<cohort>/clinvar_carriers.tsv (single header).
+# Submitted with bsub -w "done(biome_am_02c)".
+#
+# Required env: COHORT, CONFIG_PATH
+# =============================================================================
+set -euo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"
+printf '[REPO_ROOT debug] BIOAM_REPO_ROOT=%q  LS_SUBCWD=%q  PWD=%q  HERE=%q\n' \
+    "${BIOAM_REPO_ROOT:-}" "${LS_SUBCWD:-}" "${PWD:-}" "${HERE:-}" >&2
+REPO_ROOT=""
+for cand in "${BIOAM_REPO_ROOT:-}" "${LS_SUBCWD:-}" "${PWD:-}" "${HERE:+$HERE/..}"; do
+    [[ -n "$cand" && -d "$cand/lib" && -f "$cand/lib/common.sh" ]] || continue
+    REPO_ROOT="$(cd "$cand" && pwd)"
+    break
+done
+if [[ -z "$REPO_ROOT" ]]; then
+    echo "ERROR: cannot find repo root. None of BIOAM_REPO_ROOT / LS_SUBCWD / PWD / HERE/.." >&2
+    echo "       contain lib/common.sh. Set BIOAM_REPO_ROOT=/path/to/repo and re-submit." >&2
+    exit 1
+fi
+echo "[REPO_ROOT] using: $REPO_ROOT" >&2
+source "$REPO_ROOT/lib/common.sh"
+source "$REPO_ROOT/lib/load_modules.sh"
+
+CONFIG_PATH="${CONFIG_PATH:-$REPO_ROOT/config/config.yaml}"
+export CONFIG_PATH
+cd "$REPO_ROOT"
+
+: "${COHORT:?must set COHORT=cohortI or cohortII}"
+INTERMED="$(cfg_get paths.intermediate_dir)/${COHORT}"
+log "02c_gather_clinvar: cohort=$COHORT under $INTERMED"
+
+# Independent re-verification — do NOT trust upstream -w "done(...)"
+gather_verify_22 "$INTERMED" "{chr}.clinvar_carriers.tsv"
+
+OUT="${INTERMED}/clinvar_carriers.tsv"
+log "concatenating 22 per-chr ClinVar TSVs -> $OUT"
+HEADER_WRITTEN=0
+> "$OUT"
+TOTAL=0
+for i in $(seq 1 22); do
+    f="${INTERMED}/chr${i}.clinvar_carriers.tsv"
+    if [[ "$HEADER_WRITTEN" -eq 0 ]]; then
+        head -n 1 "$f" >> "$OUT"
+        HEADER_WRITTEN=1
+    fi
+    body_n="$(tail -n +2 "$f" | wc -l | awk '{print $1}')"
+    TOTAL=$((TOTAL + body_n))
+    tail -n +2 "$f" >> "$OUT"
+done
+log "02c_gather_clinvar: cohort=$COHORT total data rows=$TOTAL -> $OUT"

@@ -306,6 +306,151 @@ def subset_chen_calibration(chen_csv: str, target_genes: List[str], out_path: st
     return summary
 
 
+# ----------------------------------------------------------------------------
+# ClinVar subset (target genes, P/LP >= 2 stars -> tabixed)
+# ----------------------------------------------------------------------------
+# NCBI CLNREVSTAT -> gold-star mapping.
+_CLNREVSTAT_STARS = {
+    "practice_guideline": 4,
+    "reviewed_by_expert_panel": 3,
+    "criteria_provided,_multiple_submitters,_no_conflicts": 2,
+    "criteria_provided,_conflicting_classifications": 1,
+    "criteria_provided,_conflicting_interpretations": 1,
+    "criteria_provided,_single_submitter": 1,
+    "no_assertion_criteria_provided": 0,
+    "no_assertion_provided": 0,
+    "no_classification_provided": 0,
+    "no_classification_for_the_single_variant": 0,
+    "no_interpretation_for_the_single_variant": 0,
+}
+# Molecular-consequence (MC) SO terms treated as PTV/LoF (dropped when
+# clinvar.exclude_ptv is true, to stay comparable to the ACMG comparator).
+_CLINVAR_PTV_MC = {
+    "nonsense", "frameshift_variant", "stop_gained", "stop_lost", "start_lost",
+    "splice_acceptor_variant", "splice_donor_variant",
+}
+
+
+def _clnrevstat_stars(clnrevstat: str) -> int:
+    key = (clnrevstat or "").strip().lower()
+    if key in _CLNREVSTAT_STARS:
+        return _CLNREVSTAT_STARS[key]
+    # Defensive: any "conflicting" phrasing not enumerated above is 1 star.
+    # Match "conflicting" (not "conflict") so "no_conflicts" is unaffected.
+    if "conflicting" in key:
+        return 1
+    if key.startswith("criteria_provided"):
+        return 1
+    return 0
+
+
+def _parse_info(info: str) -> Dict[str, str]:
+    out: Dict[str, str] = {}
+    for field in info.split(";"):
+        if "=" in field:
+            k, v = field.split("=", 1)
+            out[k] = v
+        elif field:
+            out[field] = ""
+    return out
+
+
+def subset_clinvar(clinvar_vcf: str, target_genes: List[str], out_path: str,
+                   clinvar_cfg: dict) -> Dict[str, dict]:
+    """Stream the ClinVar VCF (GRCh38), keep P/LP variants in target genes that
+    pass the review-star / conflicting / PTV filters, and write a sorted
+    bgzip+tabix indexed TSV.
+
+    Output TSV columns (header "#"-prefixed for tabix):
+      #chrom  pos  ref  alt  gene_symbol  clnsig  review_stars  mc
+
+    Returns per-gene coverage: { gene_upper: {"n_clinvar_plp_2star": int} }.
+    """
+    refs_dir = os.path.dirname(out_path) or "."
+    os.makedirs(refs_dir, exist_ok=True)
+    tg_set = {g.upper() for g in target_genes}
+    min_stars = int(clinvar_cfg.get("min_review_stars", 2))
+    sig_include = {s.strip().lower() for s in clinvar_cfg.get(
+        "sig_include", ["Pathogenic", "Likely_pathogenic", "Pathogenic/Likely_pathogenic"])}
+    exclude_conflicting = bool(clinvar_cfg.get("exclude_conflicting", True))
+    exclude_ptv = bool(clinvar_cfg.get("exclude_ptv", True))
+
+    summary: Dict[str, dict] = {g.upper(): {"n_clinvar_plp_2star": 0} for g in target_genes}
+
+    unsorted = out_path[:-3] + ".unsorted.tsv" if out_path.endswith(".gz") else out_path + ".unsorted.tsv"
+    sorted_tmp = out_path[:-3] if out_path.endswith(".gz") else out_path + ".tmp"
+
+    n_total = 0
+    n_kept = 0
+    LOG.info("subsetting ClinVar VCF → %d target genes (min_stars=%d) from %s",
+             len(tg_set), min_stars, clinvar_vcf)
+    with _open_table_text(clinvar_vcf) as fh, open(unsorted, "wt") as out_fh:
+        out_fh.write("#" + "\t".join(["chrom", "pos", "ref", "alt", "gene_symbol",
+                                      "clnsig", "review_stars", "mc"]) + "\n")
+        for line in fh:
+            if not line or line.startswith("#"):
+                continue
+            n_total += 1
+            f = line.rstrip("\n").split("\t")
+            if len(f) < 8:
+                continue
+            info = _parse_info(f[7])
+            clnsig = info.get("CLNSIG", "")
+            if clnsig.strip().lower() not in sig_include:
+                continue
+            clnrevstat = info.get("CLNREVSTAT", "")
+            # NB: match "conflicting" (not "conflict") so the 2★ status
+            # "criteria_provided,_multiple_submitters,_no_conflicts" is NOT
+            # mistaken for a conflicting record.
+            is_conflicting = ("conflicting" in clnrevstat.lower()
+                              or "conflicting" in clnsig.lower())
+            if exclude_conflicting and is_conflicting:
+                continue
+            stars = _clnrevstat_stars(clnrevstat)
+            if stars < min_stars:
+                continue
+            mc = info.get("MC", "")
+            if exclude_ptv:
+                mc_terms = {p.split("|", 1)[1] for p in mc.split(",") if "|" in p}
+                if mc_terms & _CLINVAR_PTV_MC:
+                    continue
+            # GENEINFO is "SYM:id" possibly "SYMA:1|SYMB:2"; keep the first
+            # target-gene symbol we recognise.
+            geneinfo = info.get("GENEINFO", "")
+            gene = ""
+            for tok in geneinfo.split("|"):
+                sym = tok.split(":", 1)[0].strip().upper()
+                if sym in tg_set:
+                    gene = sym
+                    break
+            if not gene:
+                continue
+            chrom = chrom_norm(f[0].strip())
+            pos = f[1].strip()
+            ref = f[3].strip()
+            alt = f[4].strip()
+            if not ref or not alt or alt == ".":
+                continue
+            out_fh.write("\t".join([chrom, pos, ref, alt, gene, clnsig, str(stars), mc]) + "\n")
+            n_kept += 1
+            summary[gene]["n_clinvar_plp_2star"] += 1
+
+    LOG.info("ClinVar subset: %d records scanned, %d kept; now sorting by (chrom,pos)",
+             n_total, n_kept)
+    subprocess.check_call(
+        ["bash", "-c",
+         f"(head -n 1 {shellquote(unsorted)} && tail -n +2 {shellquote(unsorted)} "
+         f"| sort -t$'\\t' -k1,1 -k2,2n) > {shellquote(sorted_tmp)}"]
+    )
+    os.remove(unsorted)
+    subprocess.check_call(["bgzip", "-f", sorted_tmp])
+    if sorted_tmp + ".gz" != out_path:
+        shutil.move(sorted_tmp + ".gz", out_path)
+    subprocess.check_call(["tabix", "-f", "-s", "1", "-b", "2", "-e", "2", out_path])
+    LOG.info("ClinVar P/LP ≥%d★ target subset -> %s (+ .tbi)", min_stars, out_path)
+    return summary
+
+
 def shellquote(p: str) -> str:
     import shlex
     return shlex.quote(p)
@@ -450,6 +595,23 @@ def main(argv: Optional[List[str]] = None) -> int:
                                      "n_single_gene": 0, "n_domain_agg": 0,
                                      "domains_seen": set(), "labels": Counter_dict()}
                         for g in target_genes}
+
+    # ---- ClinVar P/LP >= 2-star subset (standalone comparator) --------------
+    clinvar_cfg = cfg.get("clinvar", {}) or {}
+    clinvar_subset_path = os.path.join(refs_dir, "clinvar_plp_2star.target_genes.tsv.gz")
+    clinvar_vcf = (cfg.get("references", {}).get("clinvar_vcf_local") or "").strip()
+    if not clinvar_vcf:
+        clinvar_vcf = (os.environ.get("BIOAM_CLINVAR_VCF", "") or "").strip()
+    clinvar_summary: Dict[str, dict] = {g.upper(): {"n_clinvar_plp_2star": 0} for g in target_genes}
+    clinvar_source = "NOT_AVAILABLE"
+    if clinvar_vcf and os.path.isfile(clinvar_vcf):
+        clinvar_summary = subset_clinvar(clinvar_vcf, target_genes, clinvar_subset_path, clinvar_cfg)
+        clinvar_source = os.path.basename(clinvar_vcf)
+    else:
+        LOG.warning("No ClinVar VCF available (references.clinvar_vcf_local empty/missing and "
+                    "BIOAM_CLINVAR_VCF unset). Step 02c will find no ClinVar carriers; the "
+                    "ClinVar_PLP category will be empty. 00_prepare_refs.sh downloads it from "
+                    "references.clinvar_vcf_url on a node with internet.")
 
     # ---- gencode map (gene -> transcripts) ----------------------------------
     gencode_map_path = resolve(cfg, cfg["references"]["gencode_transcript_map"])
@@ -665,6 +827,28 @@ def main(argv: Optional[List[str]] = None) -> int:
             dom_str = dom_str[:37] + "..."
         lines.append(f"| {g} | {'yes' if am_found else 'no'} | {coords} | "
                      f"{n_in} | {n_pp3} | {ca_label} | {dom_str} |")
+    lines.append("")
+    # ---- ClinVar P/LP >= 2-star coverage ----------------------------------
+    n_clinvar_total = sum(clinvar_summary.get(g.upper(), {}).get("n_clinvar_plp_2star", 0)
+                          for g in target_genes)
+    lines.append("")
+    lines.append("## ClinVar P/LP ≥2★ subset (standalone comparator)")
+    lines.append("")
+    lines.append(f"- ClinVar source: **{clinvar_source}**")
+    lines.append(f"- Filter: CLNSIG ∈ {sorted(clinvar_cfg.get('sig_include', []))}; "
+                 f"CLNREVSTAT ≥ **{clinvar_cfg.get('min_review_stars', 2)}** gold stars; "
+                 f"exclude_conflicting=**{clinvar_cfg.get('exclude_conflicting', True)}**; "
+                 f"exclude_ptv=**{clinvar_cfg.get('exclude_ptv', True)}**")
+    lines.append(f"- Total target-gene ClinVar P/LP ≥2★ variants: **{n_clinvar_total}**")
+    lines.append("- **CAVEAT:** step 01 emits an SNV-only QC'd VCF, so downstream ClinVar "
+                 "carriers cover target-gene *SNV* P/LP variants only (inframe indels are out "
+                 "of reach); PTV consequences are excluded to match the ACMG comparator.")
+    lines.append("")
+    lines.append("| gene | n_ClinVar_PLP_≥2★ |")
+    lines.append("|------|-------------------|")
+    for g in target_genes:
+        n_cv = clinvar_summary.get(g.upper(), {}).get("n_clinvar_plp_2star", 0)
+        lines.append(f"| {g} | {n_cv} |")
     lines.append("")
     lines.append("## Coverage summary")
     lines.append(f"- genes with ≥1 carrier-eligible Chen variant (PP3_≥{min_strength}): **{n_with_pp3}**")

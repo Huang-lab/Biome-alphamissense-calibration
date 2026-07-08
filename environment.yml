@@ -16,5 +16,6 @@ dependencies:
   - scipy>=1.10
   - statsmodels>=0.14
   - matplotlib>=3.7
+  - matplotlib-venn>=0.11    # fig1A 3-set Venn (ACMG / AM_calibrated / ClinVar)
   - seaborn>=0.13
   - scikit-learn>=1.3

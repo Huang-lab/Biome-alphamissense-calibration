@@ -69,6 +69,29 @@ if [[ -n "$ZENODO_URL" ]]; then
     fi
 fi
 
+# --- pre-fetch ClinVar VCF (GRCh38) via wget --------------------------------
+# prepare_refs.subset_clinvar() reads it from references.clinvar_vcf_local, or
+# from $BIOAM_CLINVAR_VCF which we export here after downloading. Skip if a
+# local path is already configured, or if we've downloaded it before.
+CLINVAR_LOCAL="$(cfg_get references.clinvar_vcf_local 2>/dev/null || echo '')"
+if [[ -z "$CLINVAR_LOCAL" ]]; then
+    CLINVAR_URL="$(cfg_get references.clinvar_vcf_url 2>/dev/null || echo '')"
+    if [[ -n "$CLINVAR_URL" ]] && command -v wget >/dev/null 2>&1; then
+        CV_DIR="$REPO_ROOT/refs/clinvar"
+        mkdir -p "$CV_DIR"
+        CV_VCF="$CV_DIR/clinvar.vcf.gz"
+        if [[ ! -s "$CV_VCF" ]]; then
+            log "wget ClinVar VCF: $CLINVAR_URL"
+            wget --tries=3 --timeout=180 -O "$CV_VCF" "$CLINVAR_URL" \
+                || die "wget failed for $CLINVAR_URL; drop the file in via references.clinvar_vcf_local"
+        fi
+        export BIOAM_CLINVAR_VCF="$CV_VCF"
+        log "ClinVar VCF ready: $CV_VCF"
+    else
+        warn "no ClinVar URL configured or wget unavailable; ClinVar_PLP category will be empty"
+    fi
+fi
+
 python3 "$REPO_ROOT/python/prepare_refs.py" --config "$CONFIG_PATH" "$@"
 
 log "00_prepare_refs: done. Review refs/REFERENCE_REPORT.md before submitting 01+."

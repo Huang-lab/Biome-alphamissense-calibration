@@ -176,6 +176,37 @@ def main(argv=None):
                 c_brca_row is not None
                 and c_brca_row["carrier_Multiple_Endocrine_Neoplasia_AM0864"].upper() == "FALSE")
 
+    # Case 11: ClinVar P/LP >=2* standalone category + AM_calibrated_not_PLP
+    # redefinition. Fixture mini_clinvar has:
+    #   - MEN1 chr2:550 C>T  Pathogenic, 2* (multiple_submitters_no_conflicts) -> KEPT
+    #   - WT1  chr3:950 G>A  Likely_pathogenic, 1* (single_submitter)          -> DROPPED (<2*)
+    #   - BRCA1 chr1:300 A>G Pathogenic, 3* but MC=nonsense (PTV)               -> DROPPED (exclude_ptv)
+    #   - BRCA1 chr1:150 A>G Conflicting_classifications                        -> DROPPED (exclude_conflicting)
+    # S1 carries MEN1 chr2:550 (AM-primary=TRUE, not ACMG). Before ClinVar it was
+    # carrier_MEN_AMonly=TRUE; the ClinVar hit must flip that to FALSE.
+    assert_case("case 11: Table C has carrier_<group>_ClinVar columns",
+                c_brca_row is not None
+                and "carrier_Multiple_Endocrine_Neoplasia_ClinVar" in c_brca_row)
+    assert_case("case 11: S1 carrier_MEN_ClinVar=TRUE (MEN1 chr2:550 P, 2*)",
+                c_brca_row is not None
+                and c_brca_row["carrier_Multiple_Endocrine_Neoplasia_ClinVar"].upper() == "TRUE",
+                f"got {c_brca_row and c_brca_row.get('carrier_Multiple_Endocrine_Neoplasia_ClinVar')!r}")
+    assert_case("case 11: S1 carrier_MEN_AMprimary=TRUE (unchanged)",
+                c_brca_row is not None
+                and c_brca_row["carrier_Multiple_Endocrine_Neoplasia_AMprimary"].upper() == "TRUE")
+    assert_case("case 11: S1 carrier_MEN_AMonly=FALSE (now excludes ClinVar P/LP too)",
+                c_brca_row is not None
+                and c_brca_row["carrier_Multiple_Endocrine_Neoplasia_AMonly"].upper() == "FALSE",
+                f"got {c_brca_row and c_brca_row.get('carrier_Multiple_Endocrine_Neoplasia_AMonly')!r}")
+    assert_case("case 11: S1 carrier_Wilms_ClinVar=FALSE (WT1 chr3:950 was only 1*)",
+                c_brca_row is not None
+                and c_brca_row["carrier_Wilms_Tumor_Syndrome_ClinVar"].upper() == "FALSE",
+                f"got {c_brca_row and c_brca_row.get('carrier_Wilms_Tumor_Syndrome_ClinVar')!r}")
+    assert_case("case 11: S1 carrier_HBOC_ClinVar=FALSE (BRCA1 chr1:150 was Conflicting)",
+                c_brca_row is not None
+                and c_brca_row["carrier_Hereditary_Breast_and_Ovarian_Cancer_Syndrome_ClinVar"].upper() == "FALSE",
+                f"got {c_brca_row and c_brca_row.get('carrier_Hereditary_Breast_and_Ovarian_Cancer_Syndrome_ClinVar')!r}")
+
     print("\nALL ASSERTIONS PASSED")
     return 0
 

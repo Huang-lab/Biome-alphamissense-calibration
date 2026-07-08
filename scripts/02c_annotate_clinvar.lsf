@@ -1,0 +1,61 @@
+#!/bin/bash
+#BSUB -J biome_am_02c[1-22]
+#BSUB -P acc_DiseaseGeneCell
+#BSUB -q premium
+#BSUB -n 4
+#BSUB -W 08:00
+#BSUB -R rusage[mem=16000]
+#BSUB -R span[hosts=1]
+#BSUB -o logs/02c_annotate_clinvar.%J.%I.stdout
+#BSUB -eo logs/02c_annotate_clinvar.%J.%I.stderr
+#BSUB -L /bin/bash
+# =============================================================================
+# 02c_annotate_clinvar.lsf — array [1-22]: flag ClinVar P/LP ≥2★ carriers from
+# the SAME step-01 QC'd per-chr VCF. Standalone; does NOT touch the AM/Chen path.
+#
+# Required env vars: COHORT, CONFIG_PATH
+# Output: intermediate/<cohort>/chr<N>.clinvar_carriers.tsv
+# =============================================================================
+set -euo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"
+printf '[REPO_ROOT debug] BIOAM_REPO_ROOT=%q  LS_SUBCWD=%q  PWD=%q  HERE=%q\n' \
+    "${BIOAM_REPO_ROOT:-}" "${LS_SUBCWD:-}" "${PWD:-}" "${HERE:-}" >&2
+REPO_ROOT=""
+for cand in "${BIOAM_REPO_ROOT:-}" "${LS_SUBCWD:-}" "${PWD:-}" "${HERE:+$HERE/..}"; do
+    [[ -n "$cand" && -d "$cand/lib" && -f "$cand/lib/common.sh" ]] || continue
+    REPO_ROOT="$(cd "$cand" && pwd)"
+    break
+done
+if [[ -z "$REPO_ROOT" ]]; then
+    echo "ERROR: cannot find repo root. None of BIOAM_REPO_ROOT / LS_SUBCWD / PWD / HERE/.." >&2
+    echo "       contain lib/common.sh. Set BIOAM_REPO_ROOT=/path/to/repo and re-submit." >&2
+    exit 1
+fi
+echo "[REPO_ROOT] using: $REPO_ROOT" >&2
+source "$REPO_ROOT/lib/common.sh"
+source "$REPO_ROOT/lib/load_modules.sh"
+
+CONFIG_PATH="${CONFIG_PATH:-$REPO_ROOT/config/config.yaml}"
+export CONFIG_PATH
+cd "$REPO_ROOT"
+
+: "${COHORT:?must set COHORT=cohortI or cohortII}"
+CHR_IDX="${LSB_JOBINDEX:-${TEST_CHR_IDX:-1}}"
+CHR="chr${CHR_IDX}"
+log "02c_annotate_clinvar: cohort=$COHORT chr=$CHR  jobid=${LSB_JOBID:-local} array=${LSB_JOBINDEX:-NA}"
+
+INTERMED="$(cfg_get paths.intermediate_dir)/${COHORT}"
+mkdir -p "$INTERMED"
+IN_VCF="${INTERMED}/${CHR}.qc.vcf.gz"
+OUT_TSV="${INTERMED}/${CHR}.clinvar_carriers.tsv"
+[[ -s "$IN_VCF" ]] || die "QC'd VCF missing: $IN_VCF  (step 01 must finish first)"
+
+python3 "$REPO_ROOT/python/annotate_clinvar.py" \
+    --config "$CONFIG_PATH" \
+    --cohort "$COHORT" \
+    --chr "$CHR" \
+    --vcf "$IN_VCF" \
+    --out "$OUT_TSV"
+
+log "02c_annotate_clinvar: cohort=$COHORT chr=$CHR DONE  -> $OUT_TSV"

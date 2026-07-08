@@ -20,6 +20,11 @@ references:
   # falls back to AM-row min/max POS per gene with a LOUD warning.
   gencode_gtf_url: "https://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_human/release_32/gencode.v32.primary_assembly.annotation.gtf.gz"
   gencode_gtf_local: ""           # optional: drop-in local path overrides URL
+  # ClinVar VCF (GRCh38, to match AlphaMissense hg38). 00_prepare_refs.sh
+  # downloads this and prepare_refs.subset_clinvar() subsets it to the target
+  # genes + P/LP ≥2★ (see the `clinvar:` block) -> refs/clinvar_plp_2star.target_genes.tsv.gz
+  clinvar_vcf_url: "https://ftp.ncbi.nlm.nih.gov/pub/clinvar/vcf_GRCh38/clinvar.vcf.gz"
+  clinvar_vcf_local: ""           # optional pre-staged Minerva path; overrides URL
 
 # -- Calibration (Chen/Pejaver variant-level table; per-variant LOOKUP) -------
 # 00_prepare_refs.sh wgets the Chen tarball, extracts it, and prepare_refs.py
@@ -167,6 +172,24 @@ acmg:
   # are treated as the comparison set. PTV is INCOMPARABLE to AM-missense.
   annotation_filter_substr: "P/LP"
   annotation_column: "annotation"
+
+# -- ClinVar comparison (second clinical-truth track) -------------------------
+# A STANDALONE pass (annotate_clinvar.py, LSF step 02c) reads each cohort's
+# QC'd VCF and flags carriers of a ClinVar P/LP variant that passes the filter
+# below. The AM/Chen path (annotate_am.py / call_carriers.py) is untouched.
+# compare_tabulate.py then joins the ClinVar carrier list exactly like the ACMG
+# list and redefines AM_calibrated_not_PLP = AM-calibrated AND NOT ACMG P/LP
+# AND NOT ClinVar P/LP.
+#
+# CAVEAT: step 01 emits an SNV-only QC'd VCF, so this list covers target-gene
+# SNV P/LP variants (missense, nonsense, splice-region SNVs) — inframe indels
+# are out of reach. To stay comparable to the ACMG comparator (which drops PTV
+# rows) we also exclude PTV/LoF molecular consequences via ClinVar's `MC` field.
+clinvar:
+  min_review_stars: 2             # CLNREVSTAT gold stars (0-4); keep >= this
+  sig_include: ["Pathogenic", "Likely_pathogenic", "Pathogenic/Likely_pathogenic"]
+  exclude_conflicting: true       # drop Conflicting_classifications_of_pathogenicity
+  exclude_ptv: true               # drop nonsense/frameshift/splice-acceptor/-donor (MC)
 
 # -- LSF resources per stage (Minerva acc_DiseaseGeneCell / premium) ----------
 lsf:
