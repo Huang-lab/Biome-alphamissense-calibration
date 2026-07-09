@@ -91,16 +91,42 @@ def make(cohort="cohortI"):
     _drew_venn = False
     try:
         from matplotlib_venn import venn3, venn3_circles
+
+        def _hex2rgb(h):
+            h = h.lstrip("#")
+            return tuple(int(h[i:i + 2], 16) / 255.0 for i in (0, 2, 4))
+
+        # Set colors from the shared palette (match every other figure).
+        set_rgb = {"A": _hex2rgb(COLORS[VC_ACMG]),      # ACMG  (gray)
+                   "B": _hex2rgb(COLORS[VC_AM]),        # AM    (blue)
+                   "C": _hex2rgb(COLORS[VC_CLINVAR])}   # ClinVar (green)
+        # Each of the 7 regions is the average of the sets it belongs to, so
+        # overlaps read as a smooth blend rather than matplotlib_venn defaults.
+        region_sets = {"100": "A", "010": "B", "001": "C",
+                       "110": "AB", "101": "AC", "011": "BC", "111": "ABC"}
+
+        def _blend(members):
+            rgbs = [set_rgb[m] for m in members]
+            return tuple(sum(c) / len(c) for c in zip(*rgbs))
+
         v = venn3(subsets=subsets,
                   set_labels=("ACMG P/LP", "AM_calibrated", "ClinVar P/LP"),
                   ax=ax)
-        venn3_circles(subsets=subsets, ax=ax, linewidth=1.5)
-        patch_colors = {"100": COLORS[VC_ACMG], "010": COLORS[VC_AM], "001": COLORS[VC_CLINVAR]}
-        for pid, col in patch_colors.items():
+        # circle edges in each set's true color for a clean, cohesive outline
+        circles = venn3_circles(subsets=subsets, ax=ax, linewidth=1.6)
+        for circ, key in zip(circles, ("A", "B", "C")):
+            circ.set_edgecolor(set_rgb[key])
+        for pid, members in region_sets.items():
             p = v.get_patch_by_id(pid)
             if p is not None:
-                p.set_color(col)
-                p.set_alpha(0.45)
+                p.set_color(_blend(members))
+                p.set_alpha(0.55)
+                p.set_edgecolor("none")
+        # label text in the matching set colors
+        for key, lbl in zip(("A", "B", "C"), v.set_labels or []):
+            if lbl is not None:
+                lbl.set_color(set_rgb[key])
+                lbl.set_fontweight("bold")
         _drew_venn = True
     except Exception as e:  # noqa: BLE001 — fall back if matplotlib_venn absent
         print(f"  [warn] matplotlib_venn unavailable ({e}); drawing text fallback")

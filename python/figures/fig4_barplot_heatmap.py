@@ -30,12 +30,26 @@ from scipy.spatial.distance import pdist
 
 from python.figures.common import (
     build_variant_table, load_metadata_groups,
-    COLORS, VC_ACMG, VC_AM, VC_AM_ONLY,
+    COLORS, VC_ACMG, VC_CLINVAR, VC_AM, VC_AM_ONLY,
     ALL_GENES_ORDERED, GENE_TO_SYNDROME,
     CONTROL_GROUPS_RAW,
     FIGW_DOUBLE, N_MIN_PHENOTYPE,
     save_fig, save_table, cohort_label,
 )
+
+# Ordered variant tracks shown in all fig4 panels.
+VC_TRACKS = [VC_ACMG, VC_CLINVAR, VC_AM, VC_AM_ONLY]
+
+
+def _vc_carrier_filter(vt, vc):
+    """Per-track carrier subset of the variant table."""
+    if vc == VC_ACMG:
+        return vt[vt["in_acmg"] == True]
+    if vc == VC_CLINVAR:
+        return vt[vt["in_clinvar"] == True]
+    if vc == VC_AM:
+        return vt[vt["in_am"] == True]
+    return vt[vt["variant_class"] == VC_AM_ONLY]
 
 HEATMAP_VMAX = 3.0   # colorbar max 0–3%; annotate only cells >3%
 
@@ -45,11 +59,8 @@ def make_barplot(vt, meta, case_groups, cohort):
     group_n = meta.groupby("Group")["sample_id"].nunique().to_dict()
 
     rows = []
-    for vc, vc_filter in [
-        (VC_ACMG,    vt[vt["in_acmg"] == True]),
-        (VC_AM,      vt[vt["in_am"]   == True]),
-        (VC_AM_ONLY, vt[vt["variant_class"] == VC_AM_ONLY]),
-    ]:
+    for vc in VC_TRACKS:
+        vc_filter = _vc_carrier_filter(vt, vc)
         vc_carriers = set(vc_filter["sample_id"].unique())
         for grp in case_groups:
             grp_samples = set(meta[meta["Group"] == grp]["sample_id"].unique())
@@ -76,11 +87,12 @@ def make_barplot(vt, meta, case_groups, cohort):
     fig_h  = max(8, len(case_groups) * 0.42 + 2)
     fig, ax = plt.subplots(figsize=(18, fig_h))
 
-    bar_h   = 0.22
-    offsets = {VC_ACMG: -bar_h, VC_AM: 0.0, VC_AM_ONLY: bar_h}
+    n_vc    = len(VC_TRACKS)
+    bar_h   = 0.8 / n_vc   # total group height ~0.8, split evenly across tracks
+    offsets = {vc: (i - (n_vc - 1) / 2.0) * bar_h for i, vc in enumerate(VC_TRACKS)}
     y_pos   = {grp: i for i, grp in enumerate(am_order)}
 
-    for vc in [VC_ACMG, VC_AM, VC_AM_ONLY]:
+    for vc in VC_TRACKS:
         sub = df[df["variant_class"] == vc].copy()
         sub["y"] = sub["Group"].map(y_pos) + offsets[vc]
         sub = sub.dropna(subset=["y"])
@@ -112,11 +124,7 @@ def make_barplot(vt, meta, case_groups, cohort):
     ax.xaxis.grid(False)
     ax.yaxis.grid(False)
 
-    legend_patches = [
-        mpatches.Patch(color=COLORS[VC_ACMG],    label=VC_ACMG),
-        mpatches.Patch(color=COLORS[VC_AM],       label=VC_AM),
-        mpatches.Patch(color=COLORS[VC_AM_ONLY],  label=VC_AM_ONLY),
-    ]
+    legend_patches = [mpatches.Patch(color=COLORS[vc], label=vc) for vc in VC_TRACKS]
     ax.legend(handles=legend_patches, fontsize=16,
               bbox_to_anchor=(1.01, 1), loc="upper left",
               framealpha=0.95, edgecolor="#CCCCCC")
@@ -129,11 +137,8 @@ def make_heatmap(vt, meta, case_groups, cohort):
     """4B: gene × Group heatmap (seaborn, clustered, vmax=5%)."""
     genes = ALL_GENES_ORDERED
 
-    for vc, vc_filter in [
-        (VC_ACMG,    vt[vt["in_acmg"] == True]),
-        (VC_AM,      vt[vt["in_am"]   == True]),
-        (VC_AM_ONLY, vt[vt["variant_class"] == VC_AM_ONLY]),
-    ]:
+    for vc in VC_TRACKS:
+        vc_filter = _vc_carrier_filter(vt, vc)
         matrix        = np.full((len(genes), len(case_groups)), np.nan)
         n_carrier_mat = np.zeros((len(genes), len(case_groups)), dtype=int)
         n_total_mat   = np.zeros((len(genes), len(case_groups)), dtype=int)
@@ -221,6 +226,7 @@ def make_heatmap(vt, meta, case_groups, cohort):
 
         fname = {
             VC_ACMG:    "fig4B_heatmap_ACMGplp",
+            VC_CLINVAR: "fig4B_heatmap_ClinVarPLP",
             VC_AM:      "fig4B_heatmap_AMcalibrated",
             VC_AM_ONLY: "fig4B_heatmap_AMcalibratedNotPLP",
         }[vc]

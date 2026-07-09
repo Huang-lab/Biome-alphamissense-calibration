@@ -28,13 +28,27 @@ from statsmodels.stats.multitest import multipletests
 
 from python.figures.common import (
     build_variant_table, load_metadata_groups,
-    COLORS, VC_ACMG, VC_AM, VC_AM_ONLY,
+    COLORS, VC_ACMG, VC_CLINVAR, VC_AM, VC_AM_ONLY,
     ALL_GENES_ORDERED, GENE_TO_SYNDROME,
     FIGW_DOUBLE,
     save_fig, save_table, cohort_label,
 )
 
 HEATMAP_VMAX = 3.0   # colorbar max 0–3%; annotate only cells >3%
+
+# Ordered variant tracks shown in all fig5 panels.
+VC_TRACKS = [VC_ACMG, VC_CLINVAR, VC_AM, VC_AM_ONLY]
+
+
+def _vc_carrier_filter(vt, vc):
+    """Per-track carrier subset of the variant table."""
+    if vc == VC_ACMG:
+        return vt[vt["in_acmg"] == True]
+    if vc == VC_CLINVAR:
+        return vt[vt["in_clinvar"] == True]
+    if vc == VC_AM:
+        return vt[vt["in_am"] == True]
+    return vt[vt["variant_class"] == VC_AM_ONLY]
 
 
 def make(cohort="cohortI"):
@@ -56,11 +70,8 @@ def make(cohort="cohortI"):
     # 5A — grouped bar chart (no error bars)
     # -----------------------------------------------------------------------
     rows = []
-    for vc, vc_filter in [
-        (VC_ACMG,    vt[vt["in_acmg"] == True]),
-        (VC_AM,      vt[vt["in_am"]   == True]),
-        (VC_AM_ONLY, vt[vt["variant_class"] == VC_AM_ONLY]),
-    ]:
+    for vc in VC_TRACKS:
+        vc_filter = _vc_carrier_filter(vt, vc)
         for anc in valid_anc:
             anc_samples = set(
                 meta[meta["genetically_determined"] == anc]
@@ -80,16 +91,17 @@ def make(cohort="cohortI"):
     df5a = pd.DataFrame(rows)
     save_table(df5a, "fig5A_ancestry_bar_data", cohort=cohort)
 
-    bar_w   = 0.22
+    n_vc    = len(VC_TRACKS)
+    bar_w   = 0.8 / n_vc
     x       = np.arange(len(valid_anc))
-    offsets = {VC_ACMG: -bar_w, VC_AM: 0.0, VC_AM_ONLY: bar_w}
+    offsets = {vc: (i - (n_vc - 1) / 2.0) * bar_w for i, vc in enumerate(VC_TRACKS)}
 
     # x-axis labels with N
     x_labels = [f"{a}\n(N={int(anc_n.get(a, 0)):,})" for a in valid_anc]
 
     fig, ax = plt.subplots(figsize=(max(13, len(valid_anc) * 2.1 + 2), 5.5))
 
-    for vc in [VC_ACMG, VC_AM, VC_AM_ONLY]:
+    for vc in VC_TRACKS:
         sub = df5a[df5a["variant_class"] == vc].set_index("ancestry").reindex(valid_anc)
         vals = sub["pct"].fillna(0).values
         xi   = x + offsets[vc]
@@ -117,11 +129,7 @@ def make(cohort="cohortI"):
     ax.xaxis.grid(False)
     ax.yaxis.grid(False)
 
-    legend_patches = [
-        mpatches.Patch(color=COLORS[VC_ACMG],    label=VC_ACMG),
-        mpatches.Patch(color=COLORS[VC_AM],      label=VC_AM),
-        mpatches.Patch(color=COLORS[VC_AM_ONLY], label=VC_AM_ONLY),
-    ]
+    legend_patches = [mpatches.Patch(color=COLORS[vc], label=vc) for vc in VC_TRACKS]
     ax.legend(handles=legend_patches, fontsize=12,
               bbox_to_anchor=(1.01, 1), loc="upper left",
               framealpha=0.9, edgecolor="#CCCCCC")
@@ -133,11 +141,8 @@ def make(cohort="cohortI"):
     # -----------------------------------------------------------------------
     genes = ALL_GENES_ORDERED
 
-    for vc, vc_filter in [
-        (VC_ACMG,    vt[vt["in_acmg"] == True]),
-        (VC_AM,      vt[vt["in_am"]   == True]),
-        (VC_AM_ONLY, vt[vt["variant_class"] == VC_AM_ONLY]),
-    ]:
+    for vc in VC_TRACKS:
+        vc_filter = _vc_carrier_filter(vt, vc)
         matrix        = np.full((len(genes), len(valid_anc)), np.nan)
         n_carrier_mat = np.zeros((len(genes), len(valid_anc)), dtype=int)
         n_total_mat   = np.zeros((len(genes), len(valid_anc)), dtype=int)
@@ -248,6 +253,7 @@ def make(cohort="cohortI"):
 
         fname = {
             VC_ACMG:    "fig5B_heatmap_ACMGplp",
+            VC_CLINVAR: "fig5B_heatmap_ClinVarPLP",
             VC_AM:      "fig5B_heatmap_AMcalibrated",
             VC_AM_ONLY: "fig5B_heatmap_AMcalibratedNotPLP",
         }[vc]
