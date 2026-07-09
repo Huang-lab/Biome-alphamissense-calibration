@@ -11,7 +11,7 @@ differences still join):
 
 | Category | Definition |
 |---|---|
-| **ACMG P/LP** | Carrier of a variant classified **Pathogenic / Likely-pathogenic by the ACMG interpretation** (ANNOVAR/InterVar), taken from the per-cohort `*_VariantsInSamplesPLPorPTV.tsv`: rows whose `annotation` contains `P/LP`. PTV-only rows are excluded (not comparable to AM missense). |
+| **ACMG P/LP** | Carrier of a variant classified **Pathogenic / Likely-pathogenic by the ACMG interpretation** (ANNOVAR/InterVar). |
 | **ClinVar P/LP** | Carrier of a variant that is **ClinVar Pathogenic / Likely-pathogenic with ≥ 2 gold stars** (review status `criteria_provided,_multiple_submitters,_no_conflicts` / `reviewed_by_expert_panel` / `practice_guideline`), excluding `Conflicting`. Covers **all variant types** (missense + indels/other), from a dedicated all-variant QC pass. |
 | **AM_calibrated** | Carrier of a variant whose **Chen/Pejaver per-variant `evidence` label is ≥ PP3_Moderate** — i.e. in `{PP3_Moderate, PP3_Moderate+, PP3_Strong, PP3_Strong+, PP3_VeryStrong}`. This is a PP3 **evidence-label lookup**, *not* a numeric AlphaMissense-score cutoff: Chen already encodes the gene-specific (or domain-aggregate) calibration in that label. `BP4_*`, `PP3_Supporting`, and variants absent from the table are **not** carriers. Threshold set by `calibration.min_evidence_strength` (default `Moderate`). Missense SNVs only (AlphaMissense scores missense). |
 | **AM_calibrated not P/LP** | An **AM_calibrated** carrier that is **neither ACMG P/LP nor ClinVar P/LP** — i.e. the novel AM calls no clinical source already flags. |
