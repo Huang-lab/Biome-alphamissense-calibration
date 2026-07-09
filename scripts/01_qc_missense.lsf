@@ -159,7 +159,7 @@ if [[ "$VARIANT_MODE" == "all" ]]; then
             | bcftools +setGT - -- -t q -n . -i "$QC_EXPR" \
             | bcftools view -Oz -o "$OUT_VCF" -
     else
-        warn "references.reference_fasta unset/missing; skipping norm for ClinVar all-variant QC — indel matching is best-effort only"
+        log "no reference_fasta; skipping bcftools norm (indels matched reference-free via min_rep downstream)"
         bcftools view -r "$CHROM_VCF" -R "$JOB_BED" $PASS_FLAG -Ou "$IN_VCF" \
             | bcftools +setGT - -- -t q -n . -i "$QC_EXPR" \
             | bcftools view -Oz -o "$OUT_VCF" -

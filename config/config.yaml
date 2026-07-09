@@ -25,12 +25,13 @@ references:
   # genes + P/LP ≥2★ (see the `clinvar:` block) -> refs/clinvar_plp_2star.target_genes.tsv.gz
   clinvar_vcf_url: "https://ftp.ncbi.nlm.nih.gov/pub/clinvar/vcf_GRCh38/clinvar.vcf.gz"
   clinvar_vcf_local: ""           # optional pre-staged Minerva path; overrides URL
-  # GRCh38 reference FASTA the BioMe VCFs were called against. Required to
-  # LEFT-NORMALIZE indels (bcftools norm -f) on BOTH the ClinVar subset and the
-  # BioMe all-variant QC VCF so non-SNV ClinVar P/LP variants join reliably by
-  # (chrom,pos,ref,alt). If empty, the ClinVar pass falls back to exact-match
-  # (SNVs perfect; indels only when representations coincide) with a warning.
-  # Set this in config.local.yaml on Minerva.
+  # OPTIONAL. Indel matching between ClinVar and the BioMe VCF is handled
+  # reference-free by minimal-representation canonicalization (util.min_rep),
+  # so you do NOT need a reference FASTA. Setting one only adds an extra
+  # bcftools-norm left-alignment pass (helps the rare repeat-region indel whose
+  # left-alignment differs between sources). Leave empty unless you have it;
+  # note it must match each cohort's contig naming, which differs between
+  # cohortI (1,2,..) and cohortII (chr1,..), so a single FASTA can't serve both.
   reference_fasta: ""
 
 # -- Calibration (Chen/Pejaver variant-level table; per-variant LOOKUP) -------

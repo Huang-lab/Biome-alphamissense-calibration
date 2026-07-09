@@ -30,11 +30,18 @@ from typing import Dict, List, Optional, Set, Tuple
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from util import LOG, die, load_config, read_tsv_dicts, report_join, resolve, write_tsv  # noqa: E402
+from util import LOG, die, load_config, min_rep, read_tsv_dicts, report_join, resolve, write_tsv  # noqa: E402
 
 
 def _truthy(v: str) -> bool:
     return (v or "").strip().upper() in ("TRUE", "T", "YES", "Y", "1")
+
+
+def _vkey(sample: str, gene_u: str, chrom: str, pos: str, ref: str, alt: str):
+    """Canonical (min-rep) variant key so the same indel from Table A / ACMG /
+    ClinVar collapses to one key regardless of padding. SNVs are unchanged."""
+    p, r, a = min_rep(pos, ref, alt)
+    return (sample, gene_u, chrom, str(p), r, a)
 
 
 def _parse_variant(v: str) -> Tuple[str, str, str, str]:
@@ -199,7 +206,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             coords = _parse_variant(vstr)
             if coords[0]:
                 acmg_coords.setdefault((sample, gene_u), coords)
-                acmg_by_variant[(sample, gene_u, *coords)] = {"variant": vstr}
+                acmg_by_variant[_vkey(sample, gene_u, *coords)] = {"variant": vstr}
             else:
                 acmg_samplegene_coordless.add((sample, gene_u))
             acmg_rows_kept += 1
@@ -230,8 +237,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             if not (gene_u and sample):
                 continue
             clinvar_carrier_by_gene[gene_u].add(sample)
-            vkey = (sample, gene_u, r.get("chr", ""), r.get("pos", ""),
-                    r.get("ref", ""), r.get("alt", ""))
+            vkey = _vkey(sample, gene_u, r.get("chr", ""), r.get("pos", ""),
+                         r.get("ref", ""), r.get("alt", ""))
             clinvar_by_variant[vkey] = {
                 "clnsig":       r.get("clinvar_clnsig", ""),
                 "review_stars": r.get("clinvar_review_stars", ""),
@@ -275,8 +282,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     for r in a_rows:
         gene_u = (r.get("gene") or "").upper()
         sample = r.get("sample_id", "")
-        vkey = (sample, gene_u, r.get("chr", ""), r.get("pos", ""),
-                r.get("ref", ""), r.get("alt", ""))
+        vkey = _vkey(sample, gene_u, r.get("chr", ""), r.get("pos", ""),
+                     r.get("ref", ""), r.get("alt", ""))
         in_am = _truthy(r.get("is_AM_carrier_primary", ""))
         in_acmg = vkey in acmg_by_variant
         cv = clinvar_by_variant.get(vkey)

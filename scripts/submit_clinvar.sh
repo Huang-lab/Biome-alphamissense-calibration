@@ -35,7 +35,7 @@ mkdir -p "$REPO_ROOT/logs" "$INTERMED"
 
 REF_FASTA="$(cfg_get references.reference_fasta 2>/dev/null || echo '')"
 [[ -n "$REF_FASTA" ]] \
-    || warn "references.reference_fasta unset — indel matching will be best-effort. Set it in config.local.yaml for reliable indel normalization."
+    || log "references.reference_fasta unset — indels are matched reference-free via minimal-representation canonicalization (no FASTA needed)."
 # Cohort II (sliced_from_combined) needs its indexed local symlink first.
 if [[ "$COHORT" == "cohortII" ]]; then
     LOCAL_DIR="$(cfg_get cohorts.cohortII.local_source_dir)"

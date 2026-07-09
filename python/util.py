@@ -219,6 +219,32 @@ def chrom_norm(c: str) -> str:
     return f"chr{c}"
 
 
+def min_rep(pos, ref: str, alt: str):
+    """Reference-free minimal representation of a variant (bcftools/vt-style):
+    trim shared suffix bases, then shared prefix bases (advancing pos). Lets the
+    SAME left-aligned indel written with different padding (e.g. ClinVar vs the
+    BioMe VCF) collapse to an identical (pos, ref, alt) key without a reference
+    genome. SNVs are returned unchanged.
+
+    Returns (pos:int, ref:str, alt:str). `pos` in and out is 1-based.
+    """
+    try:
+        p = int(pos)
+    except (TypeError, ValueError):
+        return (pos, ref, alt)
+    ref = (ref or "").upper()
+    alt = (alt or "").upper()
+    if not ref or not alt:
+        return (p, ref, alt)
+    # trim shared suffix (keep >=1 base on each allele)
+    while len(ref) > 1 and len(alt) > 1 and ref[-1] == alt[-1]:
+        ref, alt = ref[:-1], alt[:-1]
+    # trim shared prefix (advance pos)
+    while len(ref) > 1 and len(alt) > 1 and ref[0] == alt[0]:
+        ref, alt, p = ref[1:], alt[1:], p + 1
+    return (p, ref, alt)
+
+
 def vcf_chrom_prefix(vcf: str) -> str:
     """Inspect a VCF's first ##contig header and return 'chr' if the file uses
     the chr-prefixed convention, else ''. Used by step 02 to decide what region

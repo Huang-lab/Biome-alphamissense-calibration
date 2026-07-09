@@ -27,7 +27,7 @@ from typing import Dict, List, Optional, Tuple
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from util import LOG, chrom_norm, die, load_config, resolve, vcf_chrom_prefix, write_tsv  # noqa: E402
+from util import LOG, chrom_norm, die, load_config, min_rep, resolve, vcf_chrom_prefix, write_tsv  # noqa: E402
 from annotate_am import stream_vcf_genotypes  # reuse the AM VCF reader  # noqa: E402
 
 CvKey = Tuple[str, int, str, str]  # (chrom, pos, ref, alt)
@@ -60,6 +60,8 @@ def load_clinvar_for_region(clinvar_tbi: str, region: str) -> Dict[CvKey, dict]:
         except ValueError:
             continue
         ref, alt = f[2], f[3]
+        # canonicalize indel padding so the key matches the VCF's representation
+        pos, ref, alt = min_rep(pos, ref, alt)
         out[(chrom, pos, ref, alt)] = {
             "gene_symbol":  f[4],
             "clnsig":       f[5],
@@ -100,13 +102,16 @@ def main(argv: Optional[List[str]] = None) -> int:
     n_carrier_rows = 0
     for chrom, pos, ref, alt, samples in stream_vcf_genotypes(args.vcf, region=vcf_region):
         n_var_in += 1
-        rec = clinvar.get((chrom, pos, ref, alt))
+        # canonicalize the VCF variant the same way so indel padding differences
+        # don't defeat the (chrom,pos,ref,alt) join with the ClinVar subset.
+        mpos, mref, malt = min_rep(pos, ref, alt)
+        rec = clinvar.get((chrom, mpos, mref, malt))
         if rec is None:
             continue
         n_var_matched += 1
         for sample, gt, dp, gq in samples:
             rows_out.append([
-                sample, args.cohort, chrom, str(pos), ref, alt,
+                sample, args.cohort, chrom, str(mpos), mref, malt,
                 rec["gene_symbol"], rec["clnsig"], rec["review_stars"],
                 gt, dp, gq,
             ])

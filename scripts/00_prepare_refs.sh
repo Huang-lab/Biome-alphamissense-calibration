@@ -120,7 +120,7 @@ if [[ -n "$REF_FASTA" && -s "$REF_FASTA" && -n "$SRC_CLINVAR" && -s "$SRC_CLINVA
         warn "bcftools not on PATH; cannot normalize ClinVar — indel matching will be best-effort"
     fi
 elif [[ -z "$REF_FASTA" ]]; then
-    warn "references.reference_fasta unset; ClinVar indels matched best-effort (SNVs exact). Set it in config.local.yaml for reliable indel matching."
+    log "references.reference_fasta unset; ClinVar indels matched reference-free via minimal-representation canonicalization (util.min_rep) — no FASTA needed."
 fi
 
 python3 "$REPO_ROOT/python/prepare_refs.py" --config "$CONFIG_PATH" "$@"
