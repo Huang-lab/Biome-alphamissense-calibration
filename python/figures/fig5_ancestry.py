@@ -99,7 +99,7 @@ def make(cohort="cohortI"):
     # x-axis labels with N
     x_labels = [f"{a}\n(N={int(anc_n.get(a, 0)):,})" for a in valid_anc]
 
-    fig, ax = plt.subplots(figsize=(max(13, len(valid_anc) * 2.1 + 2), 5.5))
+    fig, ax = plt.subplots(figsize=(max(16, len(valid_anc) * 2.8 + 2), 7.0))
 
     for vc in VC_TRACKS:
         sub = df5a[df5a["variant_class"] == vc].set_index("ancestry").reindex(valid_anc)
@@ -109,29 +109,28 @@ def make(cohort="cohortI"):
         ax.bar(xi, vals, width=bar_w - 0.02,
                color=COLORS[vc], label=vc, alpha=0.95, edgecolor="none")
 
-        # number label above bar (rotated, no "%" sign)
+        # horizontal number label above bar (no "%" sign)
         for xi_val, v in zip(xi, vals):
             if v > 0:
-                ax.text(xi_val, v + 0.02, f"{v:.1f}",
-                        ha="center", va="bottom", fontsize=12, color="#333333",
-                        rotation=90)
+                ax.text(xi_val, v + 0.03, f"{v:.1f}",
+                        ha="center", va="bottom", fontsize=15, color="#222222")
 
     ymax_5a = df5a["pct"].max()
-    ax.set_ylim(0, ymax_5a * 1.22)
+    ax.set_ylim(0, ymax_5a * 1.20)
     ax.set_xticks(x)
-    ax.set_xticklabels(x_labels, fontsize=15)
-    ax.tick_params(axis="y", labelsize=14)
-    ax.set_xlabel("Ancestry", fontsize=19)
-    ax.set_ylabel("Carrier frequency (%)", fontsize=19)
+    ax.set_xticklabels(x_labels, fontsize=19)
+    ax.tick_params(axis="y", labelsize=18)
+    ax.set_xlabel("Ancestry", fontsize=24)
+    ax.set_ylabel("Carrier frequency (%)", fontsize=24)
     ax.set_title(f"Carrier frequency by ancestry — {cohort_label(cohort)}",
-                 fontsize=17, fontweight="bold")
+                 fontsize=22, fontweight="bold")
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
     ax.xaxis.grid(False)
     ax.yaxis.grid(False)
 
     legend_patches = [mpatches.Patch(color=COLORS[vc], label=vc) for vc in VC_TRACKS]
-    ax.legend(handles=legend_patches, fontsize=14,
+    ax.legend(handles=legend_patches, fontsize=17,
               bbox_to_anchor=(1.01, 1), loc="upper left",
               framealpha=0.9, edgecolor="#CCCCCC")
 

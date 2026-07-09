@@ -131,6 +131,45 @@ def make_barplot(vt, meta, case_groups, cohort):
 
     plt.tight_layout()
     save_fig(fig, "fig4A_barplot", cohort=cohort)
+    return df, group_n
+
+
+def make_barplot_per_category(df, group_n, cohort):
+    """4A (per-category): one publication-ready horizontal barplot per variant
+    class — carrier frequency by phenotype group, largest at top. Only groups
+    with >0 carriers for that class are shown."""
+    slug = {VC_ACMG: "ACMGplp", VC_CLINVAR: "ClinVarPLP",
+            VC_AM: "AMcalibrated", VC_AM_ONLY: "AMcalibratedNotPLP"}
+    for vc in VC_TRACKS:
+        sub = (df[(df["variant_class"] == vc) & (df["pct"] > 0)]
+               .sort_values("pct", ascending=True).reset_index(drop=True))
+        if sub.empty:
+            print(f"  [fig4A/{vc}] no groups with carriers — skipped")
+            continue
+        groups = sub["Group"].tolist()
+        y = list(range(len(groups)))
+        fig_h = max(4.5, len(groups) * 0.5 + 2)
+        fig, ax = plt.subplots(figsize=(14, fig_h))
+        ax.barh(y, sub["pct"], color=COLORS[vc], alpha=0.95,
+                edgecolor="white", linewidth=0.4, height=0.72)
+        xmax = sub["pct"].max()
+        for yi, pct in zip(y, sub["pct"]):
+            ax.text(pct + xmax * 0.012, yi, f"{pct:.1f}",
+                    va="center", ha="left", fontsize=15, color="#222222")
+        ax.set_yticks(y)
+        ax.set_yticklabels([f"{g} (N={group_n.get(g, 0):,})" for g in groups],
+                           fontsize=16)
+        ax.tick_params(axis="x", labelsize=16)
+        ax.set_xlim(0, xmax * 1.16)
+        ax.set_xlabel("Carrier frequency (%)", fontsize=22)
+        ax.set_title(f"{vc} — carrier frequency by phenotype group\n{cohort_label(cohort)}",
+                     fontsize=20, fontweight="bold", color=COLORS[vc])
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+        ax.xaxis.grid(True, linestyle=":", alpha=0.5, color="#CCCCCC")
+        ax.set_axisbelow(True)
+        plt.tight_layout()
+        save_fig(fig, f"fig4A_barplot_{slug[vc]}", cohort=cohort)
 
 
 def make_heatmap(vt, meta, case_groups, cohort):
@@ -246,7 +285,8 @@ def make(cohort="cohortI"):
     ])
     print(f"  Case groups with ≥{N_MIN_PHENOTYPE} samples: {len(case_groups)}")
 
-    make_barplot(vt, meta, case_groups, cohort)
+    df, group_n_map = make_barplot(vt, meta, case_groups, cohort)
+    make_barplot_per_category(df, group_n_map, cohort)
     make_heatmap(vt, meta, case_groups, cohort)
     print(f"[fig4_barplot_heatmap] done — {cohort}")
 
