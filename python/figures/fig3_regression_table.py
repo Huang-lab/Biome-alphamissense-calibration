@@ -26,7 +26,7 @@ import pandas as pd
 
 from python.figures.common import (
     RESULTS_I, RESULTS_II,
-    COLORS, VC_ACMG, VC_AM, VC_AM_ONLY,
+    COLORS, VC_ACMG, VC_CLINVAR, VC_AM, VC_AM_ONLY,
     SYNDROMES,
     FIGW_DOUBLE,
     save_fig, save_table, cohort_label,
@@ -34,6 +34,7 @@ from python.figures.common import (
 
 VC_COLOR = {
     VC_ACMG:    COLORS[VC_ACMG],
+    VC_CLINVAR: COLORS[VC_CLINVAR],
     VC_AM:      COLORS[VC_AM],
     VC_AM_ONLY: COLORS[VC_AM_ONLY],
 }

@@ -25,7 +25,7 @@ import pandas as pd
 
 from python.figures.common import (
     RESULTS_I, RESULTS_II,
-    COLORS, VC_ACMG, VC_AM, VC_AM_ONLY,
+    COLORS, VC_ACMG, VC_CLINVAR, VC_AM, VC_AM_ONLY,
     SYNDROME_ORDER, SYNDROME_LABELS, SYNDROME_COLORS, SYNDROMES,
     save_fig, save_table, cohort_label,
 )
@@ -98,11 +98,12 @@ def make(cohort="cohortI"):
 
     vc_slugs = {
         VC_ACMG:    "fig6_forest_ACMGplp",
+        VC_CLINVAR: "fig6_forest_ClinVarPLP",
         VC_AM:      "fig6_forest_AMcalibrated",
         VC_AM_ONLY: "fig6_forest_AMcalibratedNotPLP",
     }
 
-    for vc in [VC_ACMG, VC_AM, VC_AM_ONLY]:
+    for vc in [VC_ACMG, VC_CLINVAR, VC_AM, VC_AM_ONLY]:
         sub = df[(df["variant_class"] == vc) &
                  (~df["q_BH"].isna()) &
                  (df["q_BH"] < SIG_ALPHA)].copy()

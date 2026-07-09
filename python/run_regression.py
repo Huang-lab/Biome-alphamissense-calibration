@@ -74,6 +74,7 @@ def run_regression(cohort="cohortI"):
         syn_label = SYNDROME_LABELS[syn_key]
         for vc_label, col_suffix in [
             ("ACMG P/LP",              "ACMG_PLP"),
+            ("ClinVar P/LP",           "ClinVar"),
             ("AM_calibrated",          "AM_calibrated"),
             ("AM_calibrated not P/LP", "AM_not_PLP"),
         ]:
