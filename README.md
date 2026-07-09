@@ -2,6 +2,66 @@
 
 Code-only LSF pipeline (manual `bsub`) for applying gene-specific calibrated AlphaMissense thresholds [Chen/Pejaver 2026](https://pmc.ncbi.nlm.nih.gov/articles/PMC13174790/#S2) to 28 cancer-predisposition genes in BioMe Cohort I (Regeneron) and Cohort II (Sema4), comparing against an existing ACMG P/LP set, and producing regression-ready tables.
 
+## Where to start
+
+**The `refs/` directory is empty by design** — it is populated at runtime by
+`scripts/00_prepare_refs.sh` and is never committed. Choose your path:
+
+| I want to… | What to do |
+|---|---|
+| Verify the pipeline logic without any patient data | [Synthetic smoke test](#reproduce-without-minerva-no-phi-required) — runs on any laptop in ~30 s |
+| Run the real BioMe cohorts | [Minerva full run](#run-order-manual-on-minerva) — start with step 00 below |
+
+### Reference inputs (public download URLs)
+
+The pipeline needs five external references. **Step 00 auto-downloads three of
+them** (Chen calibration table, ClinVar VCF, and the Gencode GTF when needed);
+the other **two you must pre-stage** and point at via `config/config.yaml`
+(`references.alphamissense_tsv`, `references.gencode_transcript_map`). All are
+public — you do **not** need Minerva access to obtain them.
+
+| Reference | Public source | Auto-fetched by step 00? |
+|---|---|---|
+| AlphaMissense hg38 scores (`AlphaMissense_hg38.tsv.gz`) | [Zenodo — *Predictions for AlphaMissense* (record 8360242)](https://zenodo.org/records/8360242) | **No** — pre-stage; set `references.alphamissense_tsv` |
+| Gencode v32 transcript→gene map (2 cols: `transcript_id`, `gene_name`) | derive from the [Gencode v32 GTF](https://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_human/release_32/gencode.v32.primary_assembly.annotation.gtf.gz) (one-liner below) | **No** — pre-stage; set `references.gencode_transcript_map` |
+| Chen/Pejaver variant-level calibration table | [Zenodo record 18668684](https://zenodo.org/records/18668684) (`variant_level_calibration_table_AlphaMissense.csv.tar.gz`) | Yes (`wget`); fallback: `calibration.local_file` |
+| Gencode v32 GTF (for the exon BED) | [EBI Gencode v32](https://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_human/release_32/gencode.v32.primary_assembly.annotation.gtf.gz) | Yes (`wget`); fallback: `references.gencode_gtf_local` |
+| ClinVar VCF, GRCh38 (`clinvar.vcf.gz`) | [NCBI ClinVar](https://ftp.ncbi.nlm.nih.gov/pub/clinvar/vcf_GRCh38/clinvar.vcf.gz) | Yes (`wget`); fallback: `references.clinvar_vcf_local` |
+
+> Huang-lab Minerva copies of the two pre-staged files live under
+> `/sc/arion/projects/rg_huangk06/variants_PLP_BioMe/AlphaMissense/data/`.
+
+Build the transcript→gene map from the Gencode GTF (needs `gawk`):
+
+```bash
+zcat gencode.v32.primary_assembly.annotation.gtf.gz \
+  | gawk -F'\t' '$3=="transcript"{ \
+      match($9,/transcript_id "([^"]+)"/,t); match($9,/gene_name "([^"]+)"/,g); \
+      print t[1]"\t"g[1] }' \
+  > gencode.v32.transcriptID_genename.tsv
+```
+
+Once the two pre-staged files are in place, **run step 00 first** (login node,
+internet required):
+
+```bash
+bash scripts/00_prepare_refs.sh
+```
+
+This downloads the Chen/Pejaver calibration table and the ClinVar VCF from the
+sources above, subsets the AM table to the 28 target genes, and writes everything
+under `refs/`. It prints a `REFERENCE_REPORT.md` that you must review before
+submitting steps 01+. Do not skip it — downstream steps will silently produce no
+carriers if `refs/` is empty.
+
+If the Minerva login node blocks outbound HTTPS (`zenodo.org`, `ncbi.nlm.nih.gov`),
+download the files manually from the URLs above and set the corresponding
+`*_local` / `local_file` config keys before running step 00.
+
+> **ClinVar-only rerun:** if the AM/Chen references already exist and you only
+> need to (re)build the ClinVar subset, use `bash scripts/00_prepare_refs.sh
+> --only-clinvar` (skips the slow AM-TSV rescan).
+
 ## Reproduce without Minerva (no PHI required)
 
 The real cohorts run only on Minerva (patient-identifiable inputs cannot be
