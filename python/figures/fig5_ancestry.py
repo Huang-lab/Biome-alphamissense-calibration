@@ -109,28 +109,29 @@ def make(cohort="cohortI"):
         ax.bar(xi, vals, width=bar_w - 0.02,
                color=COLORS[vc], label=vc, alpha=0.95, edgecolor="none")
 
-        # % label above bar
+        # number label above bar (rotated, no "%" sign)
         for xi_val, v in zip(xi, vals):
             if v > 0:
-                ax.text(xi_val, v + 0.02, f"{v:.1f}%",
-                        ha="center", va="bottom", fontsize=8, color="#333333",
+                ax.text(xi_val, v + 0.02, f"{v:.1f}",
+                        ha="center", va="bottom", fontsize=12, color="#333333",
                         rotation=90)
 
     ymax_5a = df5a["pct"].max()
-    ax.set_ylim(0, ymax_5a * 1.18)
+    ax.set_ylim(0, ymax_5a * 1.22)
     ax.set_xticks(x)
-    ax.set_xticklabels(x_labels, fontsize=12)
-    ax.set_xlabel("Ancestry", fontsize=16)
-    ax.set_ylabel("Carrier frequency (%)", fontsize=16)
+    ax.set_xticklabels(x_labels, fontsize=15)
+    ax.tick_params(axis="y", labelsize=14)
+    ax.set_xlabel("Ancestry", fontsize=19)
+    ax.set_ylabel("Carrier frequency (%)", fontsize=19)
     ax.set_title(f"Carrier frequency by ancestry — {cohort_label(cohort)}",
-                 fontsize=14, fontweight="bold")
+                 fontsize=17, fontweight="bold")
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
     ax.xaxis.grid(False)
     ax.yaxis.grid(False)
 
     legend_patches = [mpatches.Patch(color=COLORS[vc], label=vc) for vc in VC_TRACKS]
-    ax.legend(handles=legend_patches, fontsize=12,
+    ax.legend(handles=legend_patches, fontsize=14,
               bbox_to_anchor=(1.01, 1), loc="upper left",
               framealpha=0.9, edgecolor="#CCCCCC")
 

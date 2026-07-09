@@ -205,7 +205,7 @@ def make_heatmap(vt, meta, case_groups, cohort):
             cmap="Reds", vmin=0, vmax=HEATMAP_VMAX,
             linewidths=0.5, linecolor="white",
             annot=annot, fmt="",
-            annot_kws={"size": 12, "color": "black"},
+            annot_kws={"size": 12, "color": "white", "weight": "bold"},
             cbar_kws={
                 "label": f"Carrier Frequency (%) — values >{HEATMAP_VMAX:.0f}% annotated",
                 "shrink": 0.5,

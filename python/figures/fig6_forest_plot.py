@@ -110,7 +110,7 @@ def make(cohort="cohortI"):
         n_rows = len(sub)
         fig_h  = max(6, n_rows * 0.48 + 2.5)
 
-        fig, ax = plt.subplots(figsize=(12, fig_h))
+        fig, ax = plt.subplots(figsize=(17, fig_h))
         sorted_sub = _draw_panel(ax, sub, vc)
 
         if sorted_sub is not None and not sorted_sub.empty:
